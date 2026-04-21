@@ -1,0 +1,58 @@
+name: fintech_b2b
+description: A premium B2B fintech mobile application with modern UI/UX.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management + navigation + DI
+  get: ^4.6.6
+
+  # UI Components
+  flutter_svg: ^2.0.9
+  cached_network_image: ^3.3.1
+  shimmer: ^3.0.0
+  lottie: ^3.1.0
+  animate_do: ^3.3.4
+  flutter_animate: ^4.5.0
+
+  # Utilities
+  intl: ^0.19.0
+  google_fonts: ^6.2.1
+
+  # Icons
+  iconsax: ^0.0.8
+  font_awesome_flutter: ^10.7.0
+
+  # Charts
+  fl_chart: ^0.68.0
+
+  # Misc
+  gap: ^3.0.1
+  flutter_staggered_animations: ^1.1.1
+  shared_preferences: ^2.2.3
+
+  # Security — Biometric + 2FA
+  local_auth: ^2.3.0
+
+  # Database & API
+  supabase_flutter: ^2.3.0
+  flutter_dotenv: ^5.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/images/
+    - assets/icons/
+    - assets/animations/
+    - .env

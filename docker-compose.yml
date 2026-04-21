@@ -1,0 +1,169 @@
+services:
+  # Supabase Database
+  db:
+    image: supabase/postgres:15.1.0.117
+    container_name: ubay-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: your-super-secret-and-long-postgres-password
+      POSTGRES_DB: postgres
+      POSTGRES_INITDB_ARGS: --auth-host=scram
+    volumes:
+      - ./volumes/db:/var/lib/postgresql/data
+      - ./supabase/migrations:/docker-entrypoint-initdb.d
+    ports:
+      - '5432:5432'
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=4
+      - -c
+      - max_wal_senders=4
+      - -c
+      - log_statement=all
+      - -c
+      - log_min_duration_statement=0
+
+  # Supabase Studio (Admin Dashboard)
+  studio:
+    image: supabase/studio:20240109-a4b3c1e
+    container_name: ubay-studio
+    restart: unless-stopped
+    depends_on:
+      - db
+      - auth
+    environment:
+      SUPABASE_URL: http://auth:9999
+      SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7OEeoPwXJtBj47BKgPvMiHIGmpxz4t8-1jz9M
+      SUPABASE_SERVICE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35LJozJQ2fjRqDIA2MA5EoM1N4cBfzXqM
+    ports:
+      - '3000:3000'
+
+  # Supabase Auth
+  auth:
+    image: supabase/gotrue:v2.91.0
+    container_name: ubay-auth
+    restart: unless-stopped
+    depends_on:
+      - db
+      - storage
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgresql://supabase_admin:your-super-secret-and-long-postgres-password@db:5432/postgres
+      GOTRUE_SITE_URL: http://localhost:3000
+      GOTRUE_URI_ALLOW_LIST: http://localhost:3000,http://localhost:5173,http://localhost:8080
+      GOTRUE_DISABLE_SIGNUP: false
+      GOTRUE_EXTERNAL_GOOGLE_ENABLED: true
+      GOTRUE_EXTERNAL_APPLE_ENABLED: true
+      GOTRUE_MAILER_AUTOCONFIRM: true
+      GOTRUE_MAILER_URLPATHS_INVITE: http://localhost:3000/auth/callback
+      GOTRUE_MAILER_URLPATHS_RECOVERY: http://localhost:3000/auth/reset-password
+      GOTRUE_MAILER_URLPATHS_EMAIL_CHANGE: http://localhost:3000/auth/email-change
+      GOTRUE_JWT_SECRET: your-super-secret-jwt-token-with-at-least-32-characters-long
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_JWT_AUD: authenticated
+      GOTRUE_JWT_DEFAULT_GROUP_NAME: authenticated
+    ports:
+      - '9999:9999'
+
+  # Supabase REST API
+  rest:
+    image: supabase/postgrest:v12.0.1
+    container_name: ubay-rest
+    restart: unless-stopped
+    depends_on:
+      - db
+      - auth
+    environment:
+      PGRST_DB_URI: postgresql://supabase_authenticator:your-super-secret-and-long-postgres-password@db:5432/postgres
+      PGRST_DB_SCHEMAS: public, storage, graphql_public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_DB_SEARCH_PATH: public
+      PGRST_JWT_SECRET: your-super-secret-jwt-token-with-at-least-32-characters-long
+      PGRST_SERVER_HOST: 0.0.0.0
+      PGRST_SERVER_PORT: 3000
+      PGRST_ADMIN_SERVER_PORT: 3001
+    ports:
+      - '3000:3000'
+
+  # Supabase Storage
+  storage:
+    image: supabase/storage-api:v0.48.4
+    container_name: ubay-storage
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7OEeoPwXJtBj47BKgPvMiHIGmpxz4t8-1jz9M
+      SERVICE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35LJozJQ2fjRqDIA2MA5EoM1N4cBfzXqM
+      POSTGRES_PASSWORD: your-super-secret-and-long-postgres-password
+      DATABASE_URL: postgresql://supabase_storage_admin:your-super-secret-and-long-postgres-password@db:5432/postgres
+      FILE_SIZE_LIMIT: 52428800
+      BUCKET_SIZE_LIMIT: 52428800
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: stub
+      REGION: stub
+      GLOBAL_S3_BUCKET: stub
+    volumes:
+      - ./volumes/storage:/var/lib/storage
+    ports:
+      - '5000:5000'
+
+  # Supabase Realtime
+  realtime:
+    image: supabase/realtime:v2.25.73
+    container_name: ubay-realtime
+    restart: unless-stopped
+    depends_on:
+      - db
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: postgres
+      DB_USER: supabase_realtime
+      DB_PASSWORD: your-super-secret-and-long-postgres-password
+      DB_SSL: false
+      DB_AFTER_CONNECT_QUERY: SET search_path TO realtime, public
+      API_JWT_SECRET: your-super-secret-jwt-token-with-at-least-32-characters-long
+      FLY_ALLOC_ID: stub
+      FLY_APP_NAME: stub
+      SECRET_KEY_BASE: UpNVntnqKaNzgidXiIfdNdL4xgDKiG+ZlTEsB+L94OYgVPAqY/cI2qgC8AJlCj+8
+      ERL_AFLAGS: -proto_dist inet
+      DNS_NODES_QUERY: stub
+      ENABLED_EXTENSIONS: true
+    ports:
+      - '4000:4000'
+
+  # Supabase Functions
+  functions:
+    image: supabase/edge-runtime:v1.45.3
+    container_name: ubay-functions
+    restart: unless-stopped
+    depends_on:
+      - db
+      - auth
+      - rest
+    environment:
+      SUPABASE_URL: http://rest:3000
+      SUPABASE_ANON_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6ImFub24iLCJleHAiOjE5ODM4MTI5OTZ9.CRXP1A7OEeoPwXJtBj47BKgPvMiHIGmpxz4t8-1jz9M
+      SUPABASE_SERVICE_ROLE_KEY: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZS1kZW1vIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImV4cCI6MTk4MzgxMjk5Nn0.EGIM96RAZx35LJozJQ2fjRqDIA2MA5EoM1N4cBfzXqM
+      SUPABASE_DB_URL: postgresql://supabase_admin:your-super-secret-and-long-postgres-password@db:5432/postgres
+    volumes:
+      - ./supabase/functions:/home/deno/functions
+    ports:
+      - '9000:9000'
+
+volumes:
+  db:
+    driver: local
+  storage:
+    driver: local
+
+networks:
+  default:
+    name: ubay-network

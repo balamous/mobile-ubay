@@ -1,0 +1,86 @@
+services:
+  # Base de données PostgreSQL (remplace Supabase DB)
+  db:
+    image: postgres:15-alpine
+    container_name: ubay-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fintech_db
+      POSTGRES_USER: fintech_admin
+      POSTGRES_PASSWORD: fintech_password_2024
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./supabase/migrations:/docker-entrypoint-initdb.d
+    ports:
+      - '5432:5432'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fintech_admin -d fintech_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # pgAdmin pour l'administration (remplace Supabase Studio)
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: ubay-pgadmin
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@ubay.com
+      PGADMIN_DEFAULT_PASSWORD: admin123
+    ports:
+      - '5050:80'
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+  # Redis pour le cache
+  redis:
+    image: redis:7-alpine
+    container_name: ubay-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+
+  # API REST simple (remplace PostgREST)
+  api:
+    image: node:18-alpine
+    container_name: ubay-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    working_dir: /app
+    volumes:
+      - ./api:/app
+      - /app/node_modules
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://fintech_admin:fintech_password_2024@db:5432/fintech_db
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: votre-jwt-secret-personnalisé-ici
+      API_PORT: 3000
+    command: >
+      sh -c "
+        if [ ! -f node_modules ]; then
+          npm install --no-optional --no-audit --no-fund;
+        fi;
+        node server-simple.js
+      "
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+  redis_data:
+
+networks:
+  default:
+    name: ubay-network
