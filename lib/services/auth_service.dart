@@ -321,11 +321,44 @@ class AuthService extends GetxService {
       this.isLoggedIn.value = true;
       print('DEBUG: Token restauré depuis SharedPreferences: $storedToken');
 
-      // Try to get user data from DatabaseService if available
-      final dbUser = _db.currentUser.value;
-      if (dbUser != null && dbUser.id.isNotEmpty) {
-        currentUser.value = dbUser;
-        print('DEBUG: Utilisateur restauré depuis DatabaseService');
+      // Try to get user data from cache first
+      final userString = prefs.getString('user');
+      if (userString != null && userString.isNotEmpty) {
+        try {
+          final userData = jsonDecode(userString);
+          final user = UserModel(
+            id: userData['id'],
+            firstName: userData['first_name'],
+            lastName: userData['last_name'],
+            email: userData['email'],
+            phone: userData['phone'],
+            avatarUrl: userData['avatar_url'],
+            balance: userData['balance']?.toDouble() ?? 0.0,
+            savingsBalance: userData['savings_balance']?.toDouble() ?? 0.0,
+            accountNumber: userData['account_number'] ?? '',
+            isVerified: userData['is_verified'] ?? false,
+            kycLevel: userData['kyc_level'] ?? '',
+            createdAt: DateTime.parse(userData['created_at']),
+          );
+          currentUser.value = user;
+          _db.currentUser.value = user;
+          print('DEBUG: Utilisateur restauré depuis cache: ${user.id}');
+        } catch (e) {
+          print('DEBUG: Erreur lors de la restauration depuis cache: $e');
+          // Fallback: try DatabaseService
+          final dbUser = _db.currentUser.value;
+          if (dbUser != null && dbUser.id.isNotEmpty) {
+            currentUser.value = dbUser;
+            print('DEBUG: Utilisateur restauré depuis DatabaseService');
+          }
+        }
+      } else {
+        // Fallback: try DatabaseService
+        final dbUser = _db.currentUser.value;
+        if (dbUser != null && dbUser.id.isNotEmpty) {
+          currentUser.value = dbUser;
+          print('DEBUG: Utilisateur restauré depuis DatabaseService');
+        }
       }
     } else {
       print('DEBUG: Aucun token trouvé, utilisateur non connecté');
@@ -340,6 +373,133 @@ class AuthService extends GetxService {
 
   void clearError() {
     error.value = '';
+  }
+
+  // ========================================
+  // CACHE METHODS
+  // ========================================
+
+  /// Récupère les informations de l'utilisateur depuis le cache SharedPreferences
+  Future<Map<String, dynamic>?> getUserFromCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userJson = prefs.getString('user');
+
+      if (userJson != null && userJson.isNotEmpty) {
+        print('DEBUG: Récupération des données utilisateur depuis le cache');
+        final userData = jsonDecode(userJson);
+        print('DEBUG: Données utilisateur en cache: $userData');
+        return userData;
+      } else {
+        print('DEBUG: Aucune donnée utilisateur trouvée dans le cache');
+        return null;
+      }
+    } catch (e) {
+      print('DEBUG: Erreur lors de la récupération depuis le cache: $e');
+      return null;
+    }
+  }
+
+  /// Affiche toutes les informations de l'utilisateur depuis le cache
+  Future<void> displayCachedUserInfo() async {
+    try {
+      final cachedData = await getUserFromCache();
+
+      if (cachedData != null) {
+        print('\n=== INFORMATIONS UTILISATEUR EN CACHE ===');
+        print('ID: ${cachedData['id']}');
+        print('Nom: ${cachedData['first_name']} ${cachedData['last_name']}');
+        print('Email: ${cachedData['email']}');
+        print('Téléphone: ${cachedData['phone']}');
+        print('Avatar URL: ${cachedData['avatar_url']}');
+        print('Solde: ${cachedData['balance']} XOF');
+        print('Solde épargne: ${cachedData['savings_balance']} XOF');
+        print('Numéro de compte: ${cachedData['account_number']}');
+        print('Vérifié: ${cachedData['is_verified']}');
+        print('Niveau KYC: ${cachedData['kyc_level']}');
+        print('Date de création: ${cachedData['created_at']}');
+
+        // Informations personnelles
+        print('\n--- INFORMATIONS PERSONNELLES ---');
+        print('Date de naissance: ${cachedData['birth_date']}');
+        print('Lieu de naissance: ${cachedData['birth_place']}');
+        print('Genre: ${cachedData['gender']}');
+        print('Profession: ${cachedData['profession']}');
+        print('Employeur: ${cachedData['employer']}');
+        print('Ville: ${cachedData['city']}');
+        print('Commune: ${cachedData['commune']}');
+        print('Quartier: ${cachedData['neighborhood']}');
+
+        // Informations d'identité
+        print('\n--- INFORMATIONS D\'IDENTITÉ ---');
+        print('Nationalité: ${cachedData['nationality']}');
+        print('Pays ID: ${cachedData['id_country']}');
+        print('Type ID: ${cachedData['id_type']}');
+        print('Numéro ID: ${cachedData['id_number']}');
+        print('Date d\'émission ID: ${cachedData['id_issue_date']}');
+        print('Date d\'expiration ID: ${cachedData['id_expiry_date']}');
+        print('Date de vérification ID: ${cachedData['id_verified_at']}');
+        print('========================================\n');
+      } else {
+        print('Aucune information utilisateur trouvée dans le cache');
+      }
+    } catch (e) {
+      print('Erreur lors de l\'affichage des informations du cache: $e');
+    }
+  }
+
+  /// Récupère le token d'authentification depuis le cache
+  Future<String?> getTokenFromCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('auth_token');
+      print(
+          'DEBUG: Token depuis cache: ${token?.substring(0, 20) ?? 'null'}...');
+      return token;
+    } catch (e) {
+      print('DEBUG: Erreur lors de la récupération du token: $e');
+      return null;
+    }
+  }
+
+  /// Vérifie le statut de connexion depuis le cache
+  Future<bool> getLoginStatusFromCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final isLoggedIn = prefs.getBool('is_logged_in') ?? false;
+      print('DEBUG: Statut de connexion depuis cache: $isLoggedIn');
+      return isLoggedIn;
+    } catch (e) {
+      print('DEBUG: Erreur lors de la vérification du statut: $e');
+      return false;
+    }
+  }
+
+  /// Affiche un résumé complet du cache utilisateur
+  Future<void> displayCacheSummary() async {
+    print('\n=== RÉSUMÉ DU CACHE UTILISATEUR ===');
+
+    // Statut de connexion
+    final isLoggedIn = await getLoginStatusFromCache();
+    print('Connecté: $isLoggedIn');
+
+    // Token
+    final token = await getTokenFromCache();
+    print('Token: ${token != null ? 'Présent' : 'Absent'}');
+
+    // Données utilisateur
+    final userData = await getUserFromCache();
+    print(
+        'Données utilisateur: ${userData != null ? 'Présentes' : 'Absentes'}');
+
+    if (userData != null) {
+      print('Utilisateur: ${userData['first_name']} ${userData['last_name']}');
+      print('Email: ${userData['email']}');
+      print('Téléphone: ${userData['phone']}');
+      print('Solde: ${userData['balance']} XOF');
+    }
+
+    print('====================================\n');
   }
 
   // ========================================

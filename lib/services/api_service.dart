@@ -144,32 +144,6 @@ class ApiService {
     }
   }
 
-  static Future<Map<String, dynamic>> getServices() async {
-    try {
-      final response = await http
-          .get(
-            Uri.parse('$_baseUrl/api/services'),
-            headers: _headers,
-          )
-          .timeout(_timeout);
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data; // Retourner directement les données de l'API
-      } else {
-        return {
-          'success': false,
-          'error': 'Échec de récupération des services',
-        };
-      }
-    } catch (e) {
-      return {
-        'success': false,
-        'error': 'Erreur réseau: ${e.toString()}',
-      };
-    }
-  }
-
   static Future<Map<String, dynamic>> getOperators() async {
     try {
       final response = await http
@@ -374,33 +348,6 @@ class ApiService {
   // CARDS
   // ========================================
 
-  static Future<Map<String, dynamic>> getUserCards(String token) async {
-    try {
-      final response = await http.get(
-        Uri.parse('$_baseUrl/api/cards'),
-        headers: {
-          ..._headers,
-          'Authorization': 'Bearer $token',
-        },
-      ).timeout(_timeout);
-
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        return data;
-      } else {
-        return {
-          'success': false,
-          'error': 'Échec de récupération des cartes',
-        };
-      }
-    } catch (e) {
-      return {
-        'success': false,
-        'error': 'Erreur réseau: ${e.toString()}',
-      };
-    }
-  }
-
   static Future<Map<String, dynamic>> createCard(
     Map<String, dynamic> cardData,
     String token,
@@ -444,6 +391,153 @@ class ApiService {
       }
     } catch (e) {
       print('Get cards error: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> getServiceCategories() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$_baseUrl/api/service-categories'),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        final error = jsonDecode(response.body);
+        throw Exception(error['error'] ?? 'Failed to get service categories');
+      }
+    } catch (e) {
+      print('Get service categories error: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> getServices({String? categoryId}) async {
+    try {
+      String url = '$_baseUrl/api/services';
+      if (categoryId != null) {
+        url += '?categoryId=$categoryId';
+      }
+
+      final response = await http.get(
+        Uri.parse(url),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        final error = jsonDecode(response.body);
+        throw Exception(error['error'] ?? 'Failed to get services');
+      }
+    } catch (e) {
+      print('Get services error: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> subscribeToService(
+    Map<String, dynamic> subscriptionData,
+    String token,
+  ) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$_baseUrl/api/service-subscriptions'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode(subscriptionData),
+      );
+
+      if (response.statusCode == 201) {
+        return jsonDecode(response.body);
+      } else {
+        final error = jsonDecode(response.body);
+        throw Exception(error['error'] ?? 'Failed to subscribe to service');
+      }
+    } catch (e) {
+      print('Subscribe to service error: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> getUserSubscriptions(
+      String userId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$_baseUrl/api/service-subscriptions/$userId'),
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        final error = jsonDecode(response.body);
+        throw Exception(error['error'] ?? 'Failed to get user subscriptions');
+      }
+    } catch (e) {
+      print('Get user subscriptions error: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> updateCard(
+    String cardId,
+    Map<String, dynamic> cardData,
+    String token,
+  ) async {
+    try {
+      final response = await http.put(
+        Uri.parse('$_baseUrl/api/cards/$cardId'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode(cardData),
+      );
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        final error = jsonDecode(response.body);
+        throw Exception(error['error'] ?? 'Failed to update card');
+      }
+    } catch (e) {
+      print('Update card error: $e');
+      return {'success': false, 'error': e.toString()};
+    }
+  }
+
+  static Future<Map<String, dynamic>> deleteCard(
+    String cardId,
+    String token,
+  ) async {
+    try {
+      final response = await http.delete(
+        Uri.parse('$_baseUrl/api/cards/$cardId'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        final error = jsonDecode(response.body);
+        throw Exception(error['error'] ?? 'Failed to delete card');
+      }
+    } catch (e) {
+      print('Delete card error: $e');
       return {'success': false, 'error': e.toString()};
     }
   }

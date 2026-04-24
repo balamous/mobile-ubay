@@ -452,6 +452,80 @@ app.post('/api/transactions', async (req, res) => {
     await pool.query(createTransactionsTable);
     await pool.query(createCardsTable);
 
+    // Create service categories table
+    const createServiceCategoriesTable = `
+      CREATE TABLE IF NOT EXISTS service_categories (
+        id VARCHAR(50) PRIMARY KEY,
+        name VARCHAR(100) NOT NULL UNIQUE,
+        description TEXT,
+        icon VARCHAR(50) NOT NULL,
+        color VARCHAR(20) NOT NULL,
+        is_active BOOLEAN DEFAULT true,
+        sort_order INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+
+    // Create services table
+    const createServicesTable = `
+      CREATE TABLE IF NOT EXISTS services (
+        id VARCHAR(50) PRIMARY KEY,
+        category_id VARCHAR(50) NOT NULL,
+        name VARCHAR(100) NOT NULL,
+        description TEXT NOT NULL,
+        icon VARCHAR(50) NOT NULL,
+        color VARCHAR(20) NOT NULL,
+        price DECIMAL(12,2),
+        is_popular BOOLEAN DEFAULT false,
+        is_active BOOLEAN DEFAULT true,
+        sort_order INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (category_id) REFERENCES service_categories(id)
+      );
+    `;
+
+    // Create service subscriptions table
+    const createServiceSubscriptionsTable = `
+      CREATE TABLE IF NOT EXISTS service_subscriptions (
+        id VARCHAR(50) PRIMARY KEY,
+        user_id VARCHAR(50) NOT NULL,
+        service_id VARCHAR(50) NOT NULL,
+        status VARCHAR(20) DEFAULT 'active',
+        amount DECIMAL(12,2) NOT NULL,
+        next_billing_date DATE,
+        auto_renew BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (service_id) REFERENCES services(id)
+      );
+    `;
+
+    // Create service transactions table
+    const createServiceTransactionsTable = `
+      CREATE TABLE IF NOT EXISTS service_transactions (
+        id VARCHAR(50) PRIMARY KEY,
+        user_id VARCHAR(50) NOT NULL,
+        service_id VARCHAR(50) NOT NULL,
+        subscription_id VARCHAR(50),
+        amount DECIMAL(12,2) NOT NULL,
+        status VARCHAR(20) DEFAULT 'completed',
+        payment_method VARCHAR(50),
+        transaction_reference VARCHAR(100),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (service_id) REFERENCES services(id),
+        FOREIGN KEY (subscription_id) REFERENCES service_subscriptions(id)
+      );
+    `;
+
+    await pool.query(createServiceCategoriesTable);
+    await pool.query(createServicesTable);
+    await pool.query(createServiceSubscriptionsTable);
+    await pool.query(createServiceTransactionsTable);
+
     // Insert transaction into database
     const query = `
       INSERT INTO transactions (
@@ -596,6 +670,118 @@ app.post('/api/cards', async (req, res) => {
 
     await pool.query(createCardsTable);
 
+    // Check and add missing columns for existing tables
+    try {
+      // Check if type column exists
+      const typeColumnCheck = `
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'cards' AND column_name = 'type'
+      `;
+      const typeResult = await pool.query(typeColumnCheck);
+      
+      if (typeResult.rows.length === 0) {
+        console.log('Adding missing type column to cards table...');
+        await pool.query('ALTER TABLE cards ADD COLUMN type VARCHAR(20) NOT NULL DEFAULT \'visa\'');
+      }
+
+      // Check if status column exists
+      const statusColumnCheck = `
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'cards' AND column_name = 'status'
+      `;
+      const statusResult = await pool.query(statusColumnCheck);
+      
+      if (statusResult.rows.length === 0) {
+        console.log('Adding missing status column to cards table...');
+        await pool.query('ALTER TABLE cards ADD COLUMN status VARCHAR(20) DEFAULT \'active\'');
+      }
+
+      // Check if limit_amount column exists
+      const limitColumnCheck = `
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'cards' AND column_name = 'limit_amount'
+      `;
+      const limitResult = await pool.query(limitColumnCheck);
+      
+      if (limitResult.rows.length === 0) {
+        console.log('Adding missing limit_amount column to cards table...');
+        await pool.query('ALTER TABLE cards ADD COLUMN limit_amount DECIMAL(12,2) DEFAULT 1000000.00');
+      }
+
+      // Check if spent_amount column exists
+      const spentColumnCheck = `
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'cards' AND column_name = 'spent_amount'
+      `;
+      const spentResult = await pool.query(spentColumnCheck);
+      
+      if (spentResult.rows.length === 0) {
+        console.log('Adding missing spent_amount column to cards table...');
+        await pool.query('ALTER TABLE cards ADD COLUMN spent_amount DECIMAL(12,2) DEFAULT 0.00');
+      }
+
+      // Check if is_virtual column exists
+      const virtualColumnCheck = `
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'cards' AND column_name = 'is_virtual'
+      `;
+      const virtualResult = await pool.query(virtualColumnCheck);
+      
+      if (virtualResult.rows.length === 0) {
+        console.log('Adding missing is_virtual column to cards table...');
+        await pool.query('ALTER TABLE cards ADD COLUMN is_virtual BOOLEAN NOT NULL DEFAULT false');
+      }
+
+      // Check if gradient_start column exists
+      const gradientStartColumnCheck = `
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'cards' AND column_name = 'gradient_start'
+      `;
+      const gradientStartResult = await pool.query(gradientStartColumnCheck);
+      
+      if (gradientStartResult.rows.length === 0) {
+        console.log('Adding missing gradient_start column to cards table...');
+        await pool.query('ALTER TABLE cards ADD COLUMN gradient_start VARCHAR(20) DEFAULT \'#667eea\'');
+      }
+
+      // Check if gradient_end column exists
+      const gradientEndColumnCheck = `
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'cards' AND column_name = 'gradient_end'
+      `;
+      const gradientEndResult = await pool.query(gradientEndColumnCheck);
+      
+      if (gradientEndResult.rows.length === 0) {
+        console.log('Adding missing gradient_end column to cards table...');
+        await pool.query('ALTER TABLE cards ADD COLUMN gradient_end VARCHAR(20) DEFAULT \'#764ba2\'');
+      }
+
+      // Check if is_default column exists
+      const defaultColumnCheck = `
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_name = 'cards' AND column_name = 'is_default'
+      `;
+      const defaultResult = await pool.query(defaultColumnCheck);
+      
+      if (defaultResult.rows.length === 0) {
+        console.log('Adding missing is_default column to cards table...');
+        await pool.query('ALTER TABLE cards ADD COLUMN is_default BOOLEAN DEFAULT false');
+      }
+
+      console.log('Cards table migration completed successfully');
+    } catch (migrationError) {
+      console.log('Migration error (non-critical):', migrationError.message);
+      // Continue even if migration fails
+    }
+
     // Get user info for card holder name
     const userQuery = 'SELECT first_name, last_name FROM users WHERE id = $1';
     const userResult = await pool.query(userQuery, [userId]);
@@ -611,10 +797,13 @@ app.post('/api/cards', async (req, res) => {
     const cardHolderName = `${user.first_name} ${user.last_name}`;
 
     // Generate card details
-    const cardId = `card_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const cardId = require('crypto').randomUUID();
     const cardNumber = Math.random().toString().slice(2, 18).padStart(16, '0');
-    const expiryMonth = String(Math.floor(Math.random() * 12) + 1).padStart(2, '0');
-    const expiryYear = String(new Date().getFullYear() + 4);
+    
+    // Date d'expiration : même mois et jour que la création, mais + 3 ans
+    const currentDate = new Date();
+    const expiryMonth = String(currentDate.getMonth() + 1).padStart(2, '0');
+    const expiryYear = String(currentDate.getFullYear() + 3);
     const cvv = Math.random().toString().slice(2, 5).padStart(3, '0');
     
     // Default gradients based on card type
@@ -625,27 +814,47 @@ app.post('/api/cards', async (req, res) => {
 
     const selectedGradient = defaultGradients[type] || defaultGradients.visa;
 
-    // Insert card into database
+    // Helper function to format gradients
+    const formatGradient = (color) => {
+      if (!color || !color.startsWith('#')) {
+        return '#' + (color || '');
+      }
+      return color;
+    };
+
+    // Insert card into database with all columns
     const query = `
       INSERT INTO cards (
         id, user_id, card_number, card_holder, expiry_month, expiry_year, 
-        cvv, type, is_virtual, gradient_start, gradient_end, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        cvv, card_type, is_default, is_active, balance, limit_amount, 
+        created_at, updated_at, type, status, spent_amount, is_virtual, 
+        gradient_start, gradient_end
+      ) VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 
+        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, $13, $14, $15, $16, $17, $18
+      )
       RETURNING *
     `;
     
     const values = [
-      cardId,
-      userId,
-      cardNumber,
-      cardHolderName,
-      expiryMonth,
-      expiryYear,
-      cvv,
-      type,
-      isVirtual || false,
-      gradientStart || selectedGradient.start,
-      gradientEnd || selectedGradient.end
+      cardId,                                    // $1: id
+      userId,                                    // $2: user_id
+      cardNumber,                                // $3: card_number
+      cardHolderName,                            // $4: card_holder
+      parseInt(expiryMonth),                     // $5: expiry_month
+      parseInt(expiryYear),                      // $6: expiry_year
+      cvv,                                       // $7: cvv
+      type,                                      // $8: card_type
+      false,                                     // $9: is_default
+      true,                                      // $10: is_active
+      0.00,                                      // $11: balance
+      1000000.00,                                // $12: limit_amount
+      type,                                      // $13: type
+      'active',                                  // $14: status
+      0.00,                                      // $15: spent_amount
+      isVirtual || false,                        // $16: is_virtual
+      formatGradient(gradientStart || selectedGradient.start),   // $17: gradient_start
+      formatGradient(gradientEnd || selectedGradient.end)        // $18: gradient_end
     ];
 
     const result = await pool.query(query, values);
@@ -758,6 +967,597 @@ app.get('/api/cards/:userId', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Erreur serveur lors de la récupération des cartes'
+    });
+  }
+});
+
+// Update card
+app.put('/api/cards/:cardId', async (req, res) => {
+  try {
+    const { cardId } = req.params;
+    const { status, limitAmount, gradientStart, gradientEnd, isDefault } = req.body;
+    
+    if (!cardId) {
+      return res.status(400).json({
+        success: false,
+        error: 'cardId requis'
+      });
+    }
+
+    // Create cards table
+    const createCardsTable = `
+      CREATE TABLE IF NOT EXISTS cards (
+        id VARCHAR(50) PRIMARY KEY,
+        user_id VARCHAR(50) NOT NULL,
+        card_number VARCHAR(16) NOT NULL UNIQUE,
+        card_holder VARCHAR(100) NOT NULL,
+        expiry_month VARCHAR(2) NOT NULL,
+        expiry_year VARCHAR(4) NOT NULL,
+        cvv VARCHAR(3) NOT NULL,
+        type VARCHAR(20) NOT NULL DEFAULT 'visa',
+        status VARCHAR(20) DEFAULT 'active',
+        limit_amount DECIMAL(12,2) DEFAULT 1000000.00,
+        spent_amount DECIMAL(12,2) DEFAULT 0.00,
+        is_virtual BOOLEAN NOT NULL DEFAULT false,
+        gradient_start VARCHAR(20) DEFAULT '#667eea',
+        gradient_end VARCHAR(20) DEFAULT '#764ba2',
+        is_default BOOLEAN DEFAULT false,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      );
+    `;
+
+    await pool.query(createCardsTable);
+
+    // Check if card exists
+    const checkQuery = 'SELECT * FROM cards WHERE id = $1';
+    const checkResult = await pool.query(checkQuery, [cardId]);
+    
+    if (checkResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Carte non trouvée'
+      });
+    }
+
+    // Build dynamic update query
+    let updateQuery = 'UPDATE cards SET updated_at = CURRENT_TIMESTAMP';
+    const updateValues = [];
+    let paramIndex = 1;
+
+    if (status !== undefined) {
+      updateQuery += `, status = $${paramIndex++}`;
+      updateValues.push(status);
+    }
+
+    if (limitAmount !== undefined) {
+      updateQuery += `, limit_amount = $${paramIndex++}`;
+      updateValues.push(limitAmount);
+    }
+
+    if (gradientStart !== undefined) {
+      updateQuery += `, gradient_start = $${paramIndex++}`;
+      updateValues.push(gradientStart);
+    }
+
+    if (gradientEnd !== undefined) {
+      updateQuery += `, gradient_end = $${paramIndex++}`;
+      updateValues.push(gradientEnd);
+    }
+
+    if (isDefault !== undefined) {
+      // If setting this card as default, unset other cards first
+      if (isDefault) {
+        const card = checkResult.rows[0];
+        await pool.query('UPDATE cards SET is_default = false WHERE user_id = $1 AND id != $2', [card.user_id, cardId]);
+      }
+      updateQuery += `, is_default = $${paramIndex++}`;
+      updateValues.push(isDefault);
+    }
+
+    updateQuery += ` WHERE id = $${paramIndex}`;
+    updateValues.push(cardId);
+
+    const result = await pool.query(updateQuery, updateValues);
+    
+    // Get updated card
+    const getUpdatedQuery = 'SELECT * FROM cards WHERE id = $1';
+    const updatedResult = await pool.query(getUpdatedQuery, [cardId]);
+    const updatedCard = updatedResult.rows[0];
+
+    console.log('Card updated successfully:', updatedCard);
+
+    res.json({
+      success: true,
+      data: {
+        id: updatedCard.id,
+        cardNumber: updatedCard.card_number,
+        cardHolder: updatedCard.card_holder,
+        expiryMonth: updatedCard.expiry_month,
+        expiryYear: updatedCard.expiry_year,
+        cvv: updatedCard.cvv,
+        type: updatedCard.type,
+        status: updatedCard.status,
+        limit: parseFloat(updatedCard.limit_amount),
+        spent: parseFloat(updatedCard.spent_amount),
+        isVirtual: updatedCard.is_virtual,
+        gradientStart: updatedCard.gradient_start,
+        gradientEnd: updatedCard.gradient_end,
+        isDefault: updatedCard.is_default,
+        createdAt: updatedCard.created_at,
+        updatedAt: updatedCard.updated_at
+      }
+    });
+
+  } catch (error) {
+    console.error('Update card error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur serveur lors de la mise à jour de la carte'
+    });
+  }
+});
+
+// Delete card (soft delete - change status to cancelled)
+app.delete('/api/cards/:cardId', async (req, res) => {
+  try {
+    const { cardId } = req.params;
+    
+    if (!cardId) {
+      return res.status(400).json({
+        success: false,
+        error: 'cardId requis'
+      });
+    }
+
+    // Create cards table
+    const createCardsTable = `
+      CREATE TABLE IF NOT EXISTS cards (
+        id VARCHAR(50) PRIMARY KEY,
+        user_id VARCHAR(50) NOT NULL,
+        card_number VARCHAR(16) NOT NULL UNIQUE,
+        card_holder VARCHAR(100) NOT NULL,
+        expiry_month VARCHAR(2) NOT NULL,
+        expiry_year VARCHAR(4) NOT NULL,
+        cvv VARCHAR(3) NOT NULL,
+        type VARCHAR(20) NOT NULL DEFAULT 'visa',
+        status VARCHAR(20) DEFAULT 'active',
+        limit_amount DECIMAL(12,2) DEFAULT 1000000.00,
+        spent_amount DECIMAL(12,2) DEFAULT 0.00,
+        is_virtual BOOLEAN NOT NULL DEFAULT false,
+        gradient_start VARCHAR(20) DEFAULT '#667eea',
+        gradient_end VARCHAR(20) DEFAULT '#764ba2',
+        is_default BOOLEAN DEFAULT false,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      );
+    `;
+
+    await pool.query(createCardsTable);
+
+    // Check if card exists
+    const checkQuery = 'SELECT * FROM cards WHERE id = $1';
+    const checkResult = await pool.query(checkQuery, [cardId]);
+    
+    if (checkResult.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Carte non trouvée'
+      });
+    }
+
+    // Soft delete by changing status to cancelled
+    const updateQuery = 'UPDATE cards SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2';
+    await pool.query(updateQuery, ['cancelled', cardId]);
+
+    console.log('Card deleted successfully:', cardId);
+
+    res.json({
+      success: true,
+      data: {
+        message: 'Carte supprimée avec succès'
+      }
+    });
+
+  } catch (error) {
+    console.error('Delete card error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur serveur lors de la suppression de la carte'
+    });
+  }
+});
+
+// Get service categories
+app.get('/api/service-categories', async (req, res) => {
+  try {
+    // Create service categories table
+    const createServiceCategoriesTable = `
+      CREATE TABLE IF NOT EXISTS service_categories (
+        id VARCHAR(50) PRIMARY KEY,
+        name VARCHAR(100) NOT NULL UNIQUE,
+        description TEXT,
+        icon VARCHAR(50) NOT NULL,
+        color VARCHAR(20) NOT NULL,
+        is_active BOOLEAN DEFAULT true,
+        sort_order INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `;
+
+    await pool.query(createServiceCategoriesTable);
+
+    // Check if categories exist, if not insert default data
+    const countQuery = 'SELECT COUNT(*) FROM service_categories';
+    const countResult = await pool.query(countQuery);
+    
+    if (parseInt(countResult.rows[0].count) === 0) {
+      // Insert default categories
+      const insertCategoriesQuery = `
+        INSERT INTO service_categories (id, name, description, icon, color, sort_order) VALUES
+        ('cat_telecom', 'Télécommunications', 'Services de téléphonie et communication', 'phone', '#FF6B6B', 1),
+        ('cat_internet', 'Internet', 'Services de connexion internet', 'wifi', '#4ECDC4', 2),
+        ('cat_streaming', 'Streaming', 'Services de streaming vidéo et musique', 'play_circle', '#45B7D1', 3),
+        ('cat_electricity', 'Électricité', 'Services d''électricité', 'bolt', '#FFA07A', 4),
+        ('cat_water', 'Eau', 'Services d''approvisionnement en eau', 'water_drop', '#98D8C8', 5),
+        ('cat_education', 'Éducation', 'Services éducatifs', 'school', '#F7DC6F', 6),
+        ('cat_health', 'Santé', 'Services de santé', 'medical', '#BB8FCE', 7)
+      `;
+      await pool.query(insertCategoriesQuery);
+    }
+
+    const query = `
+      SELECT * FROM service_categories 
+      WHERE is_active = true 
+      ORDER BY sort_order ASC
+    `;
+    
+    const result = await pool.query(query);
+    const categories = result.rows.map(cat => ({
+      id: cat.id,
+      name: cat.name,
+      description: cat.description,
+      icon: cat.icon,
+      color: cat.color,
+      isActive: cat.is_active,
+      sortOrder: cat.sort_order
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        categories: categories
+      }
+    });
+
+  } catch (error) {
+    console.error('Get service categories error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur serveur lors de la récupération des catégories de services'
+    });
+  }
+});
+
+// Get services by category
+app.get('/api/services', async (req, res) => {
+  try {
+    const { categoryId } = req.query;
+    
+    // Create services table
+    const createServicesTable = `
+      CREATE TABLE IF NOT EXISTS services (
+        id VARCHAR(50) PRIMARY KEY,
+        category_id VARCHAR(50) NOT NULL,
+        name VARCHAR(100) NOT NULL,
+        description TEXT NOT NULL,
+        icon VARCHAR(50) NOT NULL,
+        color VARCHAR(20) NOT NULL,
+        price DECIMAL(12,2),
+        is_popular BOOLEAN DEFAULT false,
+        is_active BOOLEAN DEFAULT true,
+        sort_order INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (category_id) REFERENCES service_categories(id)
+      );
+    `;
+
+    await pool.query(createServicesTable);
+
+    // Check if services exist, if not insert default data
+    const countQuery = 'SELECT COUNT(*) FROM services';
+    const countResult = await pool.query(countQuery);
+    
+    if (parseInt(countResult.rows[0].count) === 0) {
+      // Insert default services based on the image
+      const insertServicesQuery = `
+        INSERT INTO services (id, category_id, name, description, icon, color, price, is_popular, sort_order) VALUES
+        -- Télécommunications
+        ('svc_orange', 'cat_telecom', 'Orange', 'Recharge Orange Money', 'phone', '#FF8C00', 1000.00, true, 1),
+        ('svc_mtn', 'cat_telecom', 'MTN', 'Recharge MTN Mobile Money', 'phone', '#FFC107', 1000.00, true, 2),
+        ('svc_wave', 'cat_telecom', 'Wave', 'Recharge Wave', 'phone', '#7C3AED', 1000.00, false, 3),
+        
+        -- Internet
+        ('svc_orange_internet', 'cat_internet', 'Orange Internet', 'Internet haut débit Orange', 'wifi', '#FF8C00', 25000.00, true, 1),
+        ('svc_mtn_internet', 'cat_internet', 'MTN Internet', 'Internet 4G MTN', 'wifi', '#FFC107', 20000.00, false, 2),
+        ('svc_wave_internet', 'cat_internet', 'Wave Internet', 'Internet fibre Wave', 'wifi', '#7C3AED', 35000.00, false, 3),
+        
+        -- Streaming
+        ('svc_netflix', 'cat_streaming', 'Netflix', 'Abonnement Netflix Premium', 'play_circle', '#E50914', 35000.00, true, 1),
+        ('svc_disney', 'cat_streaming', 'Disney+', 'Abonnement Disney+', 'play_circle', '#113CCF', 28000.00, false, 2),
+        ('svc_prime', 'cat_streaming', 'Prime Video', 'Abonnement Amazon Prime', 'play_circle', '#00A8E1', 15000.00, false, 3),
+        
+        -- Électricité
+        ('svc_edg', 'cat_electricity', 'EDG', 'Électricité de Guinée', 'bolt', '#DC143C', 5000.00, true, 1),
+        
+        -- Eau
+        ('svc_seg', 'cat_water', 'SEG', 'Société des Eaux de Guinée', 'water_drop', '#1E90FF', 3000.00, true, 1),
+        
+        -- Éducation
+        ('svc_university', 'cat_education', 'Université', 'Frais d''inscription universitaire', 'school', '#8B4513', 500000.00, false, 1),
+        ('svc_school', 'cat_education', 'École Primaire', 'Frais de scolarité', 'school', '#FFD700', 100000.00, false, 2),
+        
+        -- Santé
+        ('svc_hospital', 'cat_health', 'Hôpital', 'Consultation hospitalière', 'medical', '#FF69B4', 25000.00, false, 1),
+        ('svc_pharmacy', 'cat_health', 'Pharmacie', 'Achat médicaments', 'medical', '#32CD32', 15000.00, false, 2)
+      `;
+      await pool.query(insertServicesQuery);
+    }
+
+    let query = `
+      SELECT s.*, c.name as category_name FROM services s
+      JOIN service_categories c ON s.category_id = c.id
+      WHERE s.is_active = true
+    `;
+    
+    const params = [];
+    
+    if (categoryId) {
+      query += ' AND s.category_id = $1';
+      params.push(categoryId);
+    }
+    
+    query += ' ORDER BY s.sort_order ASC, s.name ASC';
+    
+    const result = await pool.query(query, params);
+    const services = result.rows.map(service => ({
+      id: service.id,
+      categoryId: service.category_id,
+      categoryName: service.category_name,
+      name: service.name,
+      description: service.description,
+      icon: service.icon,
+      color: service.color,
+      price: parseFloat(service.price) || null,
+      isPopular: service.is_popular,
+      isActive: service.is_active,
+      sortOrder: service.sort_order
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        services: services
+      }
+    });
+
+  } catch (error) {
+    console.error('Get services error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur serveur lors de la récupération des services'
+    });
+  }
+});
+
+// Subscribe to service
+app.post('/api/service-subscriptions', async (req, res) => {
+  try {
+    const { userId, serviceId, amount, autoRenew = true } = req.body;
+    
+    if (!userId || !serviceId || !amount) {
+      return res.status(400).json({
+        success: false,
+        error: 'Champs requis: userId, serviceId, amount'
+      });
+    }
+
+    // Create service subscriptions table
+    const createServiceSubscriptionsTable = `
+      CREATE TABLE IF NOT EXISTS service_subscriptions (
+        id VARCHAR(50) PRIMARY KEY,
+        user_id VARCHAR(50) NOT NULL,
+        service_id VARCHAR(50) NOT NULL,
+        status VARCHAR(20) DEFAULT 'active',
+        amount DECIMAL(12,2) NOT NULL,
+        next_billing_date DATE,
+        auto_renew BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (service_id) REFERENCES services(id)
+      );
+    `;
+
+    await pool.query(createServiceSubscriptionsTable);
+
+    // Create service transactions table
+    const createServiceTransactionsTable = `
+      CREATE TABLE IF NOT EXISTS service_transactions (
+        id VARCHAR(50) PRIMARY KEY,
+        user_id VARCHAR(50) NOT NULL,
+        service_id VARCHAR(50) NOT NULL,
+        subscription_id VARCHAR(50),
+        amount DECIMAL(12,2) NOT NULL,
+        status VARCHAR(20) DEFAULT 'completed',
+        payment_method VARCHAR(50),
+        transaction_reference VARCHAR(100),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (service_id) REFERENCES services(id),
+        FOREIGN KEY (subscription_id) REFERENCES service_subscriptions(id)
+      );
+    `;
+
+    await pool.query(createServiceTransactionsTable);
+
+    // Check if user already has subscription to this service
+    const existingQuery = 'SELECT * FROM service_subscriptions WHERE user_id = $1 AND service_id = $2 AND status = $3';
+    const existingResult = await pool.query(existingQuery, [userId, serviceId, 'active']);
+    
+    if (existingResult.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Vous êtes déjà abonné à ce service'
+      });
+    }
+
+    // Generate subscription ID
+    const subscriptionId = `sub_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Calculate next billing date (30 days from now)
+    const nextBillingDate = new Date();
+    nextBillingDate.setDate(nextBillingDate.getDate() + 30);
+    
+    // Insert subscription
+    const subscriptionQuery = `
+      INSERT INTO service_subscriptions (
+        id, user_id, service_id, status, amount, next_billing_date, auto_renew
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+    `;
+    
+    const subscriptionValues = [
+      subscriptionId,
+      userId,
+      serviceId,
+      'active',
+      amount,
+      nextBillingDate.toISOString().split('T')[0],
+      autoRenew
+    ];
+
+    const subscriptionResult = await pool.query(subscriptionQuery, subscriptionValues);
+    const createdSubscription = subscriptionResult.rows[0];
+
+    // Create transaction for the subscription
+    const transactionId = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const transactionQuery = `
+      INSERT INTO service_transactions (
+        id, user_id, service_id, subscription_id, amount, status, transaction_reference
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+      RETURNING *
+    `;
+    
+    const transactionValues = [
+      transactionId,
+      userId,
+      serviceId,
+      subscriptionId,
+      amount,
+      'completed',
+      `SUB_${subscriptionId}`
+    ];
+
+    await pool.query(transactionQuery, transactionValues);
+
+    console.log('Service subscription created successfully:', createdSubscription);
+
+    res.json({
+      success: true,
+      data: {
+        id: createdSubscription.id,
+        userId: createdSubscription.user_id,
+        serviceId: createdSubscription.service_id,
+        status: createdSubscription.status,
+        amount: parseFloat(createdSubscription.amount),
+        nextBillingDate: createdSubscription.next_billing_date,
+        autoRenew: createdSubscription.auto_renew,
+        createdAt: createdSubscription.created_at
+      }
+    });
+
+  } catch (error) {
+    console.error('Create service subscription error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur serveur lors de la création de l\'abonnement'
+    });
+  }
+});
+
+// Get user subscriptions
+app.get('/api/service-subscriptions/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'userId requis'
+      });
+    }
+
+    // Create service subscriptions table
+    const createServiceSubscriptionsTable = `
+      CREATE TABLE IF NOT EXISTS service_subscriptions (
+        id VARCHAR(50) PRIMARY KEY,
+        user_id VARCHAR(50) NOT NULL,
+        service_id VARCHAR(50) NOT NULL,
+        status VARCHAR(20) DEFAULT 'active',
+        amount DECIMAL(12,2) NOT NULL,
+        next_billing_date DATE,
+        auto_renew BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (service_id) REFERENCES services(id)
+      );
+    `;
+
+    await pool.query(createServiceSubscriptionsTable);
+
+    const query = `
+      SELECT s.*, sub.id as subscription_id, sub.status as subscription_status, 
+             sub.amount as subscription_amount, sub.next_billing_date, sub.auto_renew,
+             sub.created_at as subscription_created_at
+      FROM service_subscriptions sub
+      JOIN services s ON sub.service_id = s.id
+      WHERE sub.user_id = $1
+      ORDER BY sub.created_at DESC
+    `;
+    
+    const result = await pool.query(query, [userId]);
+    const subscriptions = result.rows.map(row => ({
+      id: row.subscription_id,
+      serviceId: row.service_id,
+      serviceName: row.name,
+      serviceDescription: row.description,
+      serviceIcon: row.icon,
+      serviceColor: row.color,
+      status: row.subscription_status,
+      amount: parseFloat(row.subscription_amount),
+      nextBillingDate: row.next_billing_date,
+      autoRenew: row.auto_renew,
+      createdAt: row.subscription_created_at
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        subscriptions: subscriptions
+      }
+    });
+
+  } catch (error) {
+    console.error('Get service subscriptions error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur serveur lors de la récupération des abonnements'
     });
   }
 });

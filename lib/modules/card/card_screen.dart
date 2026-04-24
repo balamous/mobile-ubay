@@ -6,6 +6,7 @@ import '../../core/constants/app_constants.dart';
 import '../../core/utils/formatters.dart';
 import '../../data/models/card_model.dart';
 import '../../services/app_controller.dart';
+import '../../services/database_service.dart';
 import '../../routes/app_routes.dart';
 import '../../widgets/app_bottom_nav.dart';
 import '../../widgets/custom_button.dart';
@@ -20,8 +21,44 @@ class CardScreen extends StatefulWidget {
 
 class _CardScreenState extends State<CardScreen> {
   final AppController _appCtrl = AppController.to;
+  final DatabaseService _dbService = DatabaseService.to;
   int _selectedIndex = 0;
   bool _showDetails = false;
+  bool _isLoading = false;
+
+  CardModel get _selectedCard {
+    final cards = _appCtrl.cards;
+    if (cards.isEmpty)
+      return CardModel(
+          id: '',
+          cardNumber: '',
+          cardHolder: '',
+          expiryMonth: '',
+          expiryYear: '',
+          cvv: '',
+          isVirtual: false);
+    final idx = _selectedIndex.clamp(0, cards.length - 1);
+    return cards[idx];
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _refreshCards();
+  }
+
+  Future<void> _refreshCards() async {
+    setState(() => _isLoading = true);
+    try {
+      await _dbService.loadCards();
+    } catch (e) {
+      print('Error refreshing cards: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -57,10 +94,13 @@ class _CardScreenState extends State<CardScreen> {
       ),
       bottomNavigationBar: const AppBottomNav(currentIndex: 2),
       body: Obx(() {
+        debugPrint(
+            'DEBUG: Building body with _selectedIndex = $_selectedIndex');
         final cards = _appCtrl.cards;
+        if (_isLoading && cards.isEmpty) {
+          return _buildLoadingState(isDark);
+        }
         if (cards.isEmpty) return _buildEmpty(isDark);
-        final idx = _selectedIndex.clamp(0, cards.length - 1);
-        final card = cards[idx];
 
         return SingleChildScrollView(
           physics: const BouncingScrollPhysics(),
@@ -68,28 +108,33 @@ class _CardScreenState extends State<CardScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const SizedBox(height: 8),
-              // ── Cards PageView ──────────────────────────────────────────
+              // Cards PageView
               CardCarousel(
                 cards: cards,
                 height: 215,
                 showDetails: _showDetails,
-                onCardTap: (i) => setState(() => _selectedIndex = i),
+                onCardTap: (i) {
+                  debugPrint(
+                      'DEBUG: Card tapped at index $i, previous index: $_selectedIndex');
+                  setState(() {
+                    _selectedIndex = i;
+                    debugPrint(
+                        'DEBUG: _selectedIndex updated to: $_selectedIndex');
+                  });
+                },
               ).animate().fadeIn(duration: 400.ms),
               const SizedBox(height: 12),
               // Show/hide details
               Center(
                 child: GestureDetector(
-                  onTap: () =>
-                      setState(() => _showDetails = !_showDetails),
+                  onTap: () => setState(() => _showDetails = !_showDetails),
                   child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 8),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     decoration: BoxDecoration(
-                      color: isDark
-                          ? AppColors.cardDark
-                          : AppColors.white,
-                      borderRadius: BorderRadius.circular(
-                          AppConstants.radiusFull),
+                      color: isDark ? AppColors.cardDark : AppColors.white,
+                      borderRadius:
+                          BorderRadius.circular(AppConstants.radiusFull),
                       border: Border.all(
                         color: isDark
                             ? AppColors.borderDark
@@ -123,23 +168,23 @@ class _CardScreenState extends State<CardScreen> {
                 ),
               ),
               const SizedBox(height: 24),
-              // ── Stats ───────────────────────────────────────────────────
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: _buildStats(card, isDark),
-              ).animate().fadeIn(delay: 100.ms),
+              // Stats - Utilise _selectedCard pour garantir le changement
+              Obx(() => Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: _buildStats(_selectedCard, isDark),
+                  )).animate().fadeIn(delay: 100.ms),
               const SizedBox(height: 20),
-              // ── Actions ──────────────────────────────────────────────────
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: _buildActions(card, isDark),
-              ).animate().fadeIn(delay: 150.ms),
+              // Actions - Utilise _selectedCard pour garantir le changement
+              Obx(() => Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: _buildActions(_selectedCard, isDark),
+                  )).animate().fadeIn(delay: 150.ms),
               const SizedBox(height: 20),
-              // ── Card details ─────────────────────────────────────────────
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20),
-                child: _buildDetails(card, isDark),
-              ).animate().fadeIn(delay: 200.ms),
+              // Card details - Utilise _selectedCard pour garantir le changement
+              Obx(() => Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: _buildDetails(_selectedCard, isDark),
+                  )).animate().fadeIn(delay: 200.ms),
               const SizedBox(height: 32),
             ],
           ),
@@ -150,9 +195,8 @@ class _CardScreenState extends State<CardScreen> {
 
   // ── Stats card ──────────────────────────────────────────────────────────
   Widget _buildStats(CardModel card, bool isDark) {
-    final progress = card.limit! > 0
-        ? (card.spent! / card.limit!).clamp(0.0, 1.0)
-        : 0.0;
+    final progress =
+        card.limit! > 0 ? (card.spent! / card.limit!).clamp(0.0, 1.0) : 0.0;
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
@@ -184,23 +228,19 @@ class _CardScreenState extends State<CardScreen> {
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: (progress > 0.8
-                          ? AppColors.error
-                          : AppColors.primary)
+                  color: (progress > 0.8 ? AppColors.error : AppColors.primary)
                       .withOpacity(0.1),
-                  borderRadius:
-                      BorderRadius.circular(AppConstants.radiusFull),
+                  borderRadius: BorderRadius.circular(AppConstants.radiusFull),
                 ),
                 child: Text(
                   '${(progress * 100).toInt()}%',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
-                    color: progress > 0.8
-                        ? AppColors.error
-                        : AppColors.primary,
+                    color: progress > 0.8 ? AppColors.error : AppColors.primary,
                   ),
                 ),
               ),
@@ -212,25 +252,30 @@ class _CardScreenState extends State<CardScreen> {
             child: LinearProgressIndicator(
               value: progress,
               minHeight: 8,
-              backgroundColor:
-                  isDark ? AppColors.grey700 : AppColors.grey200,
+              backgroundColor: isDark ? AppColors.grey700 : AppColors.grey200,
               color: progress > 0.8 ? AppColors.error : AppColors.primary,
             ),
           ),
           const SizedBox(height: 16),
           Row(
             children: [
-              _statPill('Dépensé',
+              _statPill(
+                  'Dépensé',
                   AppFormatters.formatCurrencyCompact(card.spent!),
-                  AppColors.withdrawColor, isDark),
+                  AppColors.withdrawColor,
+                  isDark),
               const SizedBox(width: 8),
-              _statPill('Disponible',
+              _statPill(
+                  'Disponible',
                   AppFormatters.formatCurrencyCompact(card.availableBalance),
-                  AppColors.success, isDark),
+                  AppColors.success,
+                  isDark),
               const SizedBox(width: 8),
-              _statPill('Limite',
+              _statPill(
+                  'Limite',
                   AppFormatters.formatCurrencyCompact(card.limit!),
-                  AppColors.primary, isDark),
+                  AppColors.primary,
+                  isDark),
             ],
           ),
         ],
@@ -342,28 +387,27 @@ class _CardScreenState extends State<CardScreen> {
       child: Column(
         children: [
           _detail(Icons.credit_card_rounded, 'Numéro',
-              _showDetails
-                  ? _fmt(card.cardNumber)
-                  : card.maskedNumber,
-              isDark, monospace: true),
+              _showDetails ? _fmt(card.cardNumber) : card.maskedNumber, isDark,
+              monospace: true),
           _divider(isDark),
-          _detail(Icons.person_outline_rounded, 'Titulaire',
-              card.cardHolder, isDark),
+          _detail(Icons.person_outline_rounded, 'Titulaire', card.cardHolder,
+              isDark),
           _divider(isDark),
-          _detail(Icons.calendar_today_rounded, 'Expiration',
-              card.expiryDate, isDark),
+          _detail(Icons.calendar_today_rounded, 'Expiration', card.expiryDate,
+              isDark),
           _divider(isDark),
-          _detail(Icons.lock_rounded, 'CVV',
-              _showDetails ? card.cvv : '•••', isDark),
+          _detail(Icons.lock_rounded, 'CVV', _showDetails ? card.cvv : '•••',
+              isDark),
           _divider(isDark),
-          _detail(Icons.contactless_rounded, 'Type',
+          _detail(
+              Icons.contactless_rounded,
+              'Type',
               '${card.type.toString().toUpperCase()} ${card.isVirtual ? "Virtuelle" : "Physique"}',
               isDark),
           _divider(isDark),
           _detail(Icons.circle_rounded, 'Statut',
               card.status.toString().toUpperCase(), isDark,
-              valueColor:
-                  card.isActive ? AppColors.success : AppColors.error),
+              valueColor: card.isActive ? AppColors.success : AppColors.error),
         ],
       ),
     );
@@ -379,7 +423,8 @@ class _CardScreenState extends State<CardScreen> {
             width: 34,
             height: 34,
             decoration: BoxDecoration(
-              color: isDark ? AppColors.backgroundDark : AppColors.backgroundLight,
+              color:
+                  isDark ? AppColors.backgroundDark : AppColors.backgroundLight,
               borderRadius: BorderRadius.circular(10),
             ),
             child: Icon(icon,
@@ -437,9 +482,8 @@ class _CardScreenState extends State<CardScreen> {
       card.isActive
           ? 'La carte a été désactivée.'
           : 'La carte est maintenant active.',
-      backgroundColor:
-          (card.isActive ? AppColors.warning : AppColors.success)
-              .withOpacity(0.1),
+      backgroundColor: (card.isActive ? AppColors.warning : AppColors.success)
+          .withOpacity(0.1),
       colorText: card.isActive ? AppColors.warning : AppColors.success,
       snackPosition: SnackPosition.BOTTOM,
       margin: const EdgeInsets.all(16),
@@ -533,6 +577,25 @@ class _CardScreenState extends State<CardScreen> {
     );
   }
 
+  Widget _buildLoadingState(bool isDark) => Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(
+              color: AppColors.primary,
+              strokeWidth: 3,
+            ),
+            const SizedBox(height: 16),
+            Text('Chargement des cartes...',
+                style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                    color:
+                        isDark ? AppColors.grey400 : AppColors.textSecondary)),
+          ],
+        ),
+      );
+
   Widget _buildEmpty(bool isDark) => Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -545,7 +608,8 @@ class _CardScreenState extends State<CardScreen> {
                 style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
-                    color: isDark ? AppColors.grey400 : AppColors.textSecondary)),
+                    color:
+                        isDark ? AppColors.grey400 : AppColors.textSecondary)),
             const SizedBox(height: 24),
             CustomButton(
                 label: 'Créer une carte',
@@ -606,9 +670,7 @@ class _ActionBtn extends StatelessWidget {
             Text(
               label,
               style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.w700,
-                  color: color),
+                  fontSize: 10, fontWeight: FontWeight.w700, color: color),
               textAlign: TextAlign.center,
             ),
           ],

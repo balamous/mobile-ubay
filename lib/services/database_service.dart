@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../data/models/user_model.dart';
 import '../data/models/transaction_model.dart';
 import '../data/models/card_model.dart';
+import '../data/models/service_model.dart';
+import '../data/models/subscription_model.dart';
 import 'api_service.dart';
 import 'auth_service.dart';
 
@@ -37,6 +39,13 @@ class DatabaseService extends GetxService {
   // Operators from server
   final RxList<Map<String, dynamic>> operators = <Map<String, dynamic>>[].obs;
 
+  // Service categories from server
+  final RxList<Map<String, dynamic>> serviceCategories =
+      <Map<String, dynamic>>[].obs;
+
+  // User subscriptions from server
+  final RxList<UserSubscription> userSubscriptions = <UserSubscription>[].obs;
+
   // ========================================
   // INITIALIZATION
   // ========================================
@@ -48,6 +57,9 @@ class DatabaseService extends GetxService {
 
     // Charger les données utilisateur depuis le cache si disponible
     await loadUserFromCache();
+
+    // Charger les cartes de l'utilisateur
+    await loadCards();
 
     await loadPaymentMethods();
     await loadServices();
@@ -125,43 +137,64 @@ class DatabaseService extends GetxService {
   Future<void> loadCards() async {
     try {
       final currentUser = AuthService.to.currentUser.value;
+      debugPrint('DEBUG: Current user: $currentUser');
+      debugPrint('DEBUG: Current user ID: ${currentUser?.id}');
+      debugPrint(
+          'DEBUG: Is user logged in: ${AuthService.to.isLoggedIn.value}');
+
       if (currentUser == null) {
         debugPrint('DEBUG: No user logged in, cannot load cards');
         return;
       }
 
+      debugPrint('DEBUG: Loading cards for user ID: ${currentUser.id}');
       final result = await ApiService.getUserCards(currentUser.id);
+      debugPrint('DEBUG: API result: $result');
+
       if (result['success'] == true) {
         final List<dynamic> cardsData = result['data']['cards'] ?? [];
+        debugPrint('DEBUG: Cards data from API: $cardsData');
         cards.clear();
 
         for (final cardData in cardsData) {
-          final card = CardModel(
-            id: cardData['id'],
-            cardNumber: cardData['cardNumber'],
-            cardHolder: cardData['cardHolder'],
-            expiryMonth: cardData['expiryMonth'],
-            expiryYear: cardData['expiryYear'],
-            cvv: cardData['cvv'],
-            type: cardData['type'] == 'visa'
-                ? CardType.visa
-                : CardType.mastercard,
-            status: cardData['status'] == 'active'
-                ? CardStatus.active
-                : cardData['status'] == 'blocked'
-                    ? CardStatus.blocked
-                    : CardStatus.expired,
-            limit: cardData['limit'],
-            spent: cardData['spent'],
-            isVirtual: cardData['isVirtual'],
-            gradientStart: cardData['gradientStart'],
-            gradientEnd: cardData['gradientEnd'],
-            isDefault: cardData['isDefault'],
-          );
-          cards.add(card);
+          debugPrint('DEBUG: Processing card: $cardData');
+          try {
+            // Test CardModel creation from API data
+            final testCard = CardModel.fromJson(cardData);
+            debugPrint('DEBUG: CardModel created successfully: ${testCard.id}');
+
+            final card = CardModel(
+              id: cardData['id'],
+              cardNumber: cardData['cardNumber'],
+              cardHolder: cardData['cardHolder'],
+              expiryMonth: cardData['expiryMonth']?.toString() ?? '',
+              expiryYear: cardData['expiryYear']?.toString() ?? '',
+              cvv: cardData['cvv'],
+              type: cardData['type'] == 'visa'
+                  ? CardType.visa
+                  : CardType.mastercard,
+              status: cardData['status'] == 'active'
+                  ? CardStatus.active
+                  : cardData['status'] == 'blocked'
+                      ? CardStatus.blocked
+                      : CardStatus.expired,
+              limit: cardData['limit']?.toDouble(),
+              spent: cardData['spent']?.toDouble(),
+              isVirtual: cardData['isVirtual'] ?? false,
+              gradientStart: cardData['gradientStart'],
+              gradientEnd: cardData['gradientEnd'],
+              isDefault: cardData['isDefault'] ?? false,
+            );
+            cards.add(card);
+            debugPrint('DEBUG: Added card: ${card.id}');
+          } catch (e) {
+            debugPrint('DEBUG: Error creating card from data: $e');
+            debugPrint('DEBUG: Card data that failed: $cardData');
+          }
         }
 
         debugPrint('DEBUG: Loaded ${cards.length} cards from API');
+        debugPrint('DEBUG: Cards list: $cards');
       } else {
         debugPrint('DEBUG: Failed to load cards: ${result['error']}');
       }
@@ -175,12 +208,82 @@ class DatabaseService extends GetxService {
       final result = await ApiService.getServices();
       if (result['success'] == true) {
         final List<dynamic> servicesData = result['data']['services'] ?? [];
-        await loadServicesFromServer(servicesData
-            .map((service) => service as Map<String, dynamic>)
-            .toList());
+        services.clear();
+
+        for (final serviceData in servicesData) {
+          services.add(serviceData as Map<String, dynamic>);
+        }
+
+        debugPrint('DEBUG: Loaded ${services.length} services from API');
+      } else {
+        debugPrint('DEBUG: Failed to load services: ${result['error']}');
       }
     } catch (e) {
       debugPrint('Error loading services: $e');
+    }
+  }
+
+  Future<void> loadServiceCategories() async {
+    try {
+      final result = await ApiService.getServiceCategories();
+      if (result['success'] == true) {
+        final List<dynamic> categoriesData = result['data']['categories'] ?? [];
+        serviceCategories.clear();
+
+        for (final categoryData in categoriesData) {
+          serviceCategories.add(categoryData as Map<String, dynamic>);
+        }
+
+        debugPrint(
+            'DEBUG: Loaded ${serviceCategories.length} service categories from API');
+      } else {
+        debugPrint(
+            'DEBUG: Failed to load service categories: ${result['error']}');
+      }
+    } catch (e) {
+      debugPrint('Error loading service categories: $e');
+    }
+  }
+
+  Future<void> loadUserSubscriptions() async {
+    try {
+      final currentUser = AuthService.to.currentUser.value;
+      if (currentUser == null) {
+        debugPrint('DEBUG: No user logged in, cannot load subscriptions');
+        return;
+      }
+
+      final result = await ApiService.getUserSubscriptions(currentUser.id);
+      if (result['success'] == true) {
+        final List<dynamic> subscriptionsData =
+            result['data']['subscriptions'] ?? [];
+        userSubscriptions.clear();
+
+        for (final subscriptionData in subscriptionsData) {
+          final subscription = UserSubscription(
+            id: subscriptionData['id'],
+            serviceId: subscriptionData['serviceId'],
+            serviceName: subscriptionData['serviceName'],
+            serviceDescription: subscriptionData['serviceDescription'],
+            serviceIcon: subscriptionData['serviceIcon'],
+            serviceColor: subscriptionData['serviceColor'],
+            status: subscriptionData['status'],
+            amount: subscriptionData['amount'],
+            nextBillingDate: subscriptionData['nextBillingDate'],
+            autoRenew: subscriptionData['autoRenew'],
+            createdAt: subscriptionData['createdAt'],
+          );
+          userSubscriptions.add(subscription);
+        }
+
+        debugPrint(
+            'DEBUG: Loaded ${userSubscriptions.length} user subscriptions from API');
+      } else {
+        debugPrint(
+            'DEBUG: Failed to load user subscriptions: ${result['error']}');
+      }
+    } catch (e) {
+      debugPrint('Error loading user subscriptions: $e');
     }
   }
 

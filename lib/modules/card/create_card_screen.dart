@@ -1,4 +1,5 @@
 import 'dart:math';
+import 'package:fintech_b2b/widgets/custom_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
@@ -71,31 +72,38 @@ class _CreateCardScreenState extends State<CreateCardScreen>
   final _pinCtrls = List.generate(4, (_) => TextEditingController());
   final _pinNodes = List.generate(4, (_) => FocusNode());
 
-  // Preview card
+  // Preview card - Dynamic fields
   late AnimationController _flipCtrl;
   late Animation<double> _flipAnim;
   bool _cardFlipped = false;
 
-  final String _generatedNumber = _generateCardNumber();
-  final String _generatedCvv = _generateCvv();
-  final String _expiryMonth =
-      '${DateTime.now().month.toString().padLeft(2, '0')}';
-  final String _expiryYear = '${(DateTime.now().year + 3) % 100}';
+  // Dynamic card data (will be updated from API)
+  String _generatedNumber = '';
+  String _generatedCvv = '';
+  String _expiryMonth = '';
+  String _expiryYear = '';
+  String _cardHolderName = '';
 
-  static String _generateCardNumber() {
-    final r = Random();
-    return List.generate(16, (_) => r.nextInt(10).toString()).join();
-  }
+  // Dynamic gradient selection
+  String _selectedGradientStart = '';
+  String _selectedGradientEnd = '';
 
-  static String _generateCvv() {
-    final r = Random();
-    return List.generate(3, (_) => r.nextInt(10).toString()).join();
-  }
+  // Default gradients based on card type
+  static const Map<String, Map<String, String>> _defaultGradients = {
+    'visa': {
+      'start': '#667eea',
+      'end': '#764ba2',
+    },
+    'mastercard': {
+      'start': '#f093fb',
+      'end': '#f5576c',
+    },
+  };
 
   @override
   void initState() {
     super.initState();
-    _holderCtrl.text = 'FATOUMATA CAMARA';
+    _initializeDynamicFields();
     _flipCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 600),
@@ -103,6 +111,117 @@ class _CreateCardScreenState extends State<CreateCardScreen>
     _flipAnim = Tween<double>(begin: 0, end: 1).animate(
       CurvedAnimation(parent: _flipCtrl, curve: Curves.easeInOutCubic),
     );
+  }
+
+  void _initializeDynamicFields() async {
+    // Initialize with temporary values (will be updated from API)
+    final now = DateTime.now();
+    _generatedNumber = _generateTempCardNumber();
+    _generatedCvv = _generateTempCvv();
+    _expiryMonth = now.month.toString().padLeft(2, '0');
+    _expiryYear = (now.year + 4).toString();
+
+    // Get the user's full name from cache first
+    await _getUserNameFromCache();
+
+    // Set default gradients based on card type
+    _updateSelectedGradients();
+  }
+
+  String _generateTempCardNumber() {
+    final r = Random();
+    return List.generate(16, (_) => r.nextInt(10).toString()).join();
+  }
+
+  String _generateTempCvv() {
+    final r = Random();
+    return List.generate(3, (_) => r.nextInt(10).toString()).join();
+  }
+
+  Future<void> _getUserNameFromCache() async {
+    try {
+      // Récupérer les informations utilisateur depuis le cache
+      final cachedData = await AuthService.to.getUserFromCache();
+
+      if (cachedData != null) {
+        // Construire le nom complet depuis les données du cache
+        final firstName = cachedData['first_name'] ?? '';
+        final lastName = cachedData['last_name'] ?? '';
+        _cardHolderName = '$firstName $lastName'.trim();
+
+        // Mettre à jour le champ de texte en majuscules
+        if (_cardHolderName.isNotEmpty) {
+          _cardHolderName = _cardHolderName.toUpperCase();
+          _holderCtrl.text = _cardHolderName;
+          print('DEBUG: Nom récupéré depuis cache: $_cardHolderName');
+        } else {
+          _cardHolderName = 'UTILISATEUR';
+          _holderCtrl.text = _cardHolderName;
+          print('DEBUG: Nom vide dans cache, utilisation de défaut');
+        }
+      } else {
+        // Fallback: utiliser l'utilisateur connecté actuel
+        final currentUser = AuthService.to.currentUser.value;
+        _cardHolderName = currentUser?.fullName?.toUpperCase() ?? 'UTILISATEUR';
+        _holderCtrl.text = _cardHolderName;
+        print(
+            'DEBUG: Cache vide, utilisation utilisateur actuel: $_cardHolderName');
+      }
+    } catch (e) {
+      print('DEBUG: Erreur lors de la récupération du nom depuis cache: $e');
+      // Fallback ultime
+      _cardHolderName = 'UTILISATEUR';
+      _holderCtrl.text = _cardHolderName;
+    }
+  }
+
+  void _updateSelectedGradients() {
+    // Use existing _CardTheme objects
+    if (_selectedTheme < _cardThemes.length) {
+      final theme = _cardThemes[_selectedTheme];
+      // Extract colors from gradient for API
+      final gradient = theme.gradient;
+      final colors = gradient.colors;
+      if (colors.isNotEmpty) {
+        _selectedGradientStart =
+            colors.first.value.toRadixString(16).padLeft(8, '0').substring(2);
+        _selectedGradientEnd =
+            colors.last.value.toRadixString(16).padLeft(8, '0').substring(2);
+      }
+    } else {
+      // Use default gradients based on card type
+      final cardType = _isVisa ? 'visa' : 'mastercard';
+      final defaultGradient =
+          _defaultGradients[cardType] ?? _defaultGradients['visa']!;
+      _selectedGradientStart = defaultGradient['start']!;
+      _selectedGradientEnd = defaultGradient['end']!;
+    }
+  }
+
+  void _onCardTypeChanged(bool isVisa) {
+    setState(() {
+      _isVisa = isVisa;
+      _updateSelectedGradients();
+    });
+  }
+
+  void _onVirtualChanged(bool isVirtual) {
+    setState(() {
+      _isVirtual = isVirtual;
+    });
+  }
+
+  void _onThemeChanged(int themeIndex) {
+    setState(() {
+      _selectedTheme = themeIndex;
+      _updateSelectedGradients();
+    });
+  }
+
+  void _onCardHolderChanged(String name) {
+    setState(() {
+      _cardHolderName = name;
+    });
   }
 
   @override
