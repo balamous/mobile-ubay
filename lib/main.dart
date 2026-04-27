@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:get/get.dart';
 import 'package:intl/date_symbol_data_local.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'core/theme/app_theme.dart';
 import 'routes/app_routes.dart';
 import 'services/app_controller.dart';
@@ -13,6 +13,8 @@ import 'services/api_service.dart';
 import 'services/biometric_service.dart';
 import 'services/twofa_service.dart';
 import 'services/transaction_service.dart';
+import 'services/websocket_service.dart';
+import 'services/contact_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -42,8 +44,20 @@ void main() async {
   await Get.put(DashboardService());
   await Get.put(TransactionService());
   await Get.put(AppController());
+  await Get.put(WebSocketService()); // Real-time transaction notifications
+  await Get.put(ContactService()); // Transfer contacts
   await Get.putAsync(() async => await BiometricService().init());
   await Get.putAsync(() async => await TwoFAService().init());
+
+  // ── Récupération des données utilisateur ──────────────────────────────────
+  // Charger depuis le cache d'abord pour affichage rapide
+  await DatabaseService.to.loadUserFromCache();
+
+  // Si utilisateur connecté, récupérer les données fraîches depuis l'API
+  if (AuthService.to.isLoggedIn.value &&
+      AuthService.to.token.value.isNotEmpty) {
+    await DatabaseService.to.refreshUserData();
+  }
 
   runApp(const UBayApp());
 }
@@ -112,6 +126,17 @@ class _UBayAppState extends State<UBayApp> with WidgetsBindingObserver {
           getPages: AppRoutes.pages,
           defaultTransition: Transition.cupertino,
           transitionDuration: const Duration(milliseconds: 300),
+          // Localisation pour le français (nécessaire pour DatePicker)
+          localizationsDelegates: [
+            GlobalMaterialLocalizations.delegate,
+            GlobalWidgetsLocalizations.delegate,
+            GlobalCupertinoLocalizations.delegate,
+          ],
+          supportedLocales: [
+            Locale('fr', 'FR'),
+            Locale('en', 'US'),
+          ],
+          locale: Locale('fr', 'FR'),
         ));
   }
 }

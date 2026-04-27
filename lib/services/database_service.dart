@@ -10,6 +10,7 @@ import '../data/models/service_model.dart';
 import '../data/models/subscription_model.dart';
 import 'api_service.dart';
 import 'auth_service.dart';
+import 'transaction_service.dart';
 
 class DatabaseService extends GetxService {
   static DatabaseService get to => Get.find();
@@ -28,6 +29,10 @@ class DatabaseService extends GetxService {
 
   // Cache contacts for platform users (stored locally, not on server)
   final RxList<Map<String, dynamic>> contacts = <Map<String, dynamic>>[].obs;
+
+  // Recent beneficiaries (users who received transfers)
+  final RxList<Map<String, dynamic>> recentBeneficiaries =
+      <Map<String, dynamic>>[].obs;
 
   // Payment methods from server
   final RxList<Map<String, dynamic>> paymentMethods =
@@ -119,8 +124,63 @@ class DatabaseService extends GetxService {
     }
   }
 
+  // Sauvegarder les données utilisateur dans SharedPreferences
+  Future<void> saveUserToCache(UserModel user) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userJson = jsonEncode(user.toJson());
+      await prefs.setString('user', userJson);
+      debugPrint('DEBUG: Utilisateur sauvegardé dans le cache');
+    } catch (e) {
+      debugPrint(
+          'Erreur lors de la sauvegarde de l\'utilisateur dans le cache: $e');
+    }
+  }
+
+  // Récupérer les données fraîches depuis l'API et mettre en cache
+  Future<void> refreshUserData() async {
+    try {
+      final token = AuthService.to.token.value;
+      if (token.isEmpty) {
+        debugPrint(
+            'DEBUG: Pas de token d\'authentification, impossible de rafraîchir');
+        return;
+      }
+
+      debugPrint(
+          'DEBUG: Récupération des données utilisateur depuis l\'API...');
+      final result = await ApiService.getUserProfile(token);
+
+      if (result['success'] == true && result['data'] != null) {
+        final userData = result['data']['user'] ?? result['data'];
+        final userModel = UserModel.fromJson(userData);
+
+        // Mettre à jour l'utilisateur courant
+        this.currentUser.value = userModel;
+        AuthService.to.currentUser.value = userModel;
+
+        // Sauvegarder dans le cache
+        await saveUserToCache(userModel);
+
+        // Charger aussi les transactions
+        await TransactionService.to.loadTransactions();
+
+        debugPrint('DEBUG: Données utilisateur rafraîchies et mises en cache');
+      } else {
+        debugPrint(
+            'DEBUG: Échec de la récupération des données: ${result['error']}');
+      }
+    } catch (e) {
+      debugPrint('Erreur lors du rafraîchissement des données utilisateur: $e');
+    }
+  }
+
   Future<void> loadPaymentMethods() async {
     try {
+      // Charger d'abord depuis le cache pour affichage rapide
+      await loadPaymentMethodsFromCache();
+
+      // Puis charger depuis le serveur
       final result = await ApiService.getPaymentMethods();
       if (result['success'] == true) {
         final List<dynamic> methodsData =
@@ -128,9 +188,13 @@ class DatabaseService extends GetxService {
         await loadPaymentMethodsFromServer(methodsData
             .map((method) => method as Map<String, dynamic>)
             .toList());
+
+        // Sauvegarder en cache pour la prochaine fois
+        await savePaymentMethodsToCache();
       }
     } catch (e) {
       debugPrint('Error loading payment methods: $e');
+      // En cas d'erreur réseau, on garde le cache existant
     }
   }
 
@@ -534,6 +598,101 @@ class DatabaseService extends GetxService {
       debugPrint('Payment method added: ${method['name']}');
     } catch (e) {
       debugPrint('Error adding payment method: $e');
+    }
+  }
+
+  // ========================================
+  // CACHE PAYMENT METHODS
+  // ========================================
+
+  Future<void> savePaymentMethodsToCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final methodsJson = jsonEncode(paymentMethods.toList());
+      await prefs.setString('payment_methods_cache', methodsJson);
+      debugPrint('Saved ${paymentMethods.length} payment methods to cache');
+    } catch (e) {
+      debugPrint('Error saving payment methods to cache: $e');
+    }
+  }
+
+  Future<void> loadPaymentMethodsFromCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final methodsJson = prefs.getString('payment_methods_cache');
+      if (methodsJson != null) {
+        final List<dynamic> methodsList = jsonDecode(methodsJson);
+        paymentMethods.clear();
+        paymentMethods.addAll(
+          methodsList.map((m) => m as Map<String, dynamic>),
+        );
+        debugPrint(
+            'Loaded ${paymentMethods.length} payment methods from cache');
+      }
+    } catch (e) {
+      debugPrint('Error loading payment methods from cache: $e');
+    }
+  }
+
+  // ========================================
+  // BENEFICIARIES (Recent transfer recipients)
+  // ========================================
+
+  Future<void> loadBeneficiaries() async {
+    try {
+      // Charger d'abord depuis le cache
+      await loadBeneficiariesFromCache();
+
+      final authService = Get.find<AuthService>();
+      final userId = authService.currentUser.value?.id;
+      if (userId == null) return;
+
+      // Puis charger depuis le serveur
+      final result = await ApiService.getBeneficiaries(userId);
+      if (result['success'] == true) {
+        final List<dynamic> beneficiariesData =
+            result['data']['beneficiaries'] ?? [];
+        recentBeneficiaries.clear();
+        recentBeneficiaries.addAll(
+          beneficiariesData.map((b) => b as Map<String, dynamic>),
+        );
+        debugPrint(
+            'Loaded ${recentBeneficiaries.length} beneficiaries from server');
+
+        // Sauvegarder en cache
+        await saveBeneficiariesToCache();
+      }
+    } catch (e) {
+      debugPrint('Error loading beneficiaries: $e');
+    }
+  }
+
+  Future<void> saveBeneficiariesToCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final beneficiariesJson = jsonEncode(recentBeneficiaries.toList());
+      await prefs.setString('beneficiaries_cache', beneficiariesJson);
+      debugPrint('Saved ${recentBeneficiaries.length} beneficiaries to cache');
+    } catch (e) {
+      debugPrint('Error saving beneficiaries to cache: $e');
+    }
+  }
+
+  Future<void> loadBeneficiariesFromCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final beneficiariesJson = prefs.getString('beneficiaries_cache');
+      if (beneficiariesJson != null) {
+        final List<dynamic> beneficiariesList = jsonDecode(beneficiariesJson);
+        recentBeneficiaries.clear();
+        recentBeneficiaries.addAll(
+          beneficiariesList.map((b) => b as Map<String, dynamic>),
+        );
+        debugPrint(
+            'Loaded ${recentBeneficiaries.length} beneficiaries from cache');
+      }
+    } catch (e) {
+      debugPrint('Error loading beneficiaries from cache: $e');
     }
   }
 

@@ -137,7 +137,7 @@ class AuthService extends GetxService {
       isLoading.value = true;
       error.value = '';
 
-      print(
+      debugPrint(
           'DEBUG: Tentative d\'inscription avec email: $email, phone: $phone');
 
       // Call API for registration

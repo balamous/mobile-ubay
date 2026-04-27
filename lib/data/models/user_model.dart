@@ -31,6 +31,8 @@ class UserModel {
   final String? idIssueDate; // "12 juin 2020"
   final DateTime? idExpiryDate; // "11 juin 2027"
   final DateTime? idVerifiedAt; // "08 janvier 2024"
+  final String? idFrontImage; // URL de l'image recto
+  final String? idBackImage; // URL de l'image verso
 
   UserModel({
     required this.id,
@@ -60,6 +62,8 @@ class UserModel {
     this.idIssueDate,
     this.idExpiryDate,
     this.idVerifiedAt,
+    this.idFrontImage,
+    this.idBackImage,
   });
 
   String get fullName => '$firstName $lastName';
@@ -98,6 +102,8 @@ class UserModel {
       'id_issue_date': idIssueDate,
       'id_expiry_date': idExpiryDate?.toIso8601String(),
       'id_verified_at': idVerifiedAt?.toIso8601String(),
+      'id_front_image': idFrontImage,
+      'id_back_image': idBackImage,
     };
   }
 
@@ -136,6 +142,8 @@ class UserModel {
       idVerifiedAt: json['idVerifiedAt'] != null
           ? DateTime.tryParse(json['idVerifiedAt'].toString())
           : null,
+      idFrontImage: json['idFrontImage'] ?? json['id_front_image'],
+      idBackImage: json['idBackImage'] ?? json['id_back_image'],
     );
   }
 
@@ -161,6 +169,8 @@ class UserModel {
     String? idIssueDate,
     DateTime? idExpiryDate,
     DateTime? idVerifiedAt,
+    String? idFrontImage,
+    String? idBackImage,
     bool? isVerified,
     String? kycLevel,
   }) {
@@ -192,6 +202,8 @@ class UserModel {
       idIssueDate: idIssueDate ?? this.idIssueDate,
       idExpiryDate: idExpiryDate ?? this.idExpiryDate,
       idVerifiedAt: idVerifiedAt ?? this.idVerifiedAt,
+      idFrontImage: idFrontImage ?? this.idFrontImage,
+      idBackImage: idBackImage ?? this.idBackImage,
     );
   }
 }

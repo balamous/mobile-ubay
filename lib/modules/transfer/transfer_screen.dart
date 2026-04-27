@@ -12,6 +12,7 @@ import '../../widgets/input_field.dart';
 import '../../widgets/success_overlay.dart';
 import '../../core/utils/biometric_guard.dart';
 import '../../services/transaction_service.dart';
+import '../../services/contact_service.dart';
 
 class TransferScreen extends StatefulWidget {
   const TransferScreen({super.key});
@@ -24,9 +25,11 @@ class _TransferScreenState extends State<TransferScreen> {
   final _amountCtrl = TextEditingController();
   final _phoneCtrl = TextEditingController();
   final _noteCtrl = TextEditingController();
+  final _recipientController = TextEditingController();
   final AppController _appCtrl = AppController.to;
   Map<String, dynamic>? _selectedContact;
   bool _isLoading = false;
+  String _transferType = 'national'; // 'national' ou 'international'
 
   @override
   void initState() {
@@ -35,6 +38,10 @@ class _TransferScreenState extends State<TransferScreen> {
     ever(_appCtrl.user, (user) {
       if (mounted) setState(() {});
     });
+
+    // Charger les bénéficiaires et contacts récents
+    DatabaseService.to.loadBeneficiaries();
+    ContactService.to.loadContacts();
   }
 
   bool get _canSubmit {
@@ -48,9 +55,12 @@ class _TransferScreenState extends State<TransferScreen> {
     final amount = double.parse(_amountCtrl.text);
     final recipient = _selectedContact?['name'] ?? _phoneCtrl.text;
 
+    final typeLabel = _transferType == 'international'
+        ? 'Transfert International'
+        : 'Transfert National';
     final confirmed = await BiometricGuard.show(
       context,
-      action: 'transfert',
+      action: typeLabel,
       amount: amount,
       recipient: recipient,
       actionIcon: Icons.send_rounded,
@@ -62,14 +72,17 @@ class _TransferScreenState extends State<TransferScreen> {
     await Future.delayed(const Duration(milliseconds: 1800));
 
     // Sauvegarder la transaction avec TransactionService
+    final txTypeLabel =
+        _transferType == 'international' ? 'International' : 'National';
     final success = await TransactionService.to.saveTransfer(
       amount,
-      'Transfert vers $recipient',
+      'Transfert $txTypeLabel vers $recipient',
       recipient,
     );
 
     if (success) {
-      _appCtrl.updateBalance(-amount);
+      // Rafraîchir les données utilisateur depuis le serveur pour avoir le solde correct
+      await DatabaseService.to.refreshUserData();
     }
     setState(() => _isLoading = false);
     await SuccessOverlay.show(
@@ -97,14 +110,16 @@ class _TransferScreenState extends State<TransferScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Contacts carousel
-            Text(
-              'Contacts récents',
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: isDark ? AppColors.white : AppColors.grey900,
+            if (DatabaseService.to.contacts.length == 0)
+              Text(
+                'Contacts récents',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: isDark ? AppColors.white : AppColors.grey900,
+                ),
               ),
-            ),
+
             const SizedBox(height: 14),
             SizedBox(
               height: 90,
@@ -180,6 +195,49 @@ class _TransferScreenState extends State<TransferScreen> {
               ),
             ).animate().fadeIn(duration: 400.ms),
             const SizedBox(height: 24),
+            // Bénéficiaires récents
+            _buildBeneficiariesSection(isDark),
+            const SizedBox(height: 24),
+
+            // Contacts avec compte UBAY
+            _buildContactsSection(isDark),
+            const SizedBox(height: 24),
+
+            // Type de transfert (National / International)
+            Text(
+              'Type de transfert',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: isDark ? AppColors.white : AppColors.grey900,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: _TransferTypeChip(
+                    label: 'National',
+                    icon: Icons.public,
+                    isSelected: _transferType == 'national',
+                    onTap: () => setState(() => _transferType = 'national'),
+                    isDark: isDark,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _TransferTypeChip(
+                    label: 'International',
+                    icon: Icons.flight,
+                    isSelected: _transferType == 'international',
+                    onTap: () =>
+                        setState(() => _transferType = 'international'),
+                    isDark: isDark,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 20),
             // Phone input
             InputField(
               label: 'Numéro de téléphone',
@@ -291,6 +349,298 @@ class _TransferScreenState extends State<TransferScreen> {
           shape: BoxShape.circle,
         ),
         child: const Icon(Icons.arrow_back_ios_new_rounded, size: 18),
+      ),
+    );
+  }
+
+  Widget _buildBeneficiariesSection(bool isDark) {
+    return Obx(() {
+      final beneficiaries = DatabaseService.to.recentBeneficiaries;
+
+      if (beneficiaries.isEmpty) {
+        return const SizedBox.shrink();
+      }
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Bénéficiaires récents',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+              color: isDark ? AppColors.white : AppColors.grey900,
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 90,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: beneficiaries.length,
+              itemBuilder: (context, index) {
+                final beneficiary = beneficiaries[index];
+                final hasAccount = beneficiary['hasAccount'] == true;
+                final user = beneficiary['user'];
+                final phone = beneficiary['phone'] as String?;
+                final name = user != null
+                    ? '${user['firstName'] ?? ''} ${user['lastName'] ?? ''}'
+                        .trim()
+                    : (beneficiary['name'] ?? phone ?? 'Inconnu');
+
+                return GestureDetector(
+                  onTap: () {
+                    if (phone != null) {
+                      setState(() {
+                        _phoneCtrl.text = phone;
+                        _selectedContact = {
+                          'name': name,
+                          'phone': phone,
+                        };
+                      });
+                    }
+                  },
+                  child: Container(
+                    width: 72,
+                    margin: const EdgeInsets.only(right: 12),
+                    child: Column(
+                      children: [
+                        Container(
+                          width: 56,
+                          height: 56,
+                          decoration: BoxDecoration(
+                            color: hasAccount
+                                ? AppColors.primary.withOpacity(0.12)
+                                : (isDark
+                                    ? AppColors.grey800
+                                    : AppColors.grey100),
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: hasAccount
+                                  ? AppColors.primary
+                                  : Colors.transparent,
+                              width: 2,
+                            ),
+                          ),
+                          child: user?['photoUrl'] != null
+                              ? ClipOval(
+                                  child: Image.network(
+                                    user['photoUrl'],
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) => Icon(
+                                      Icons.person,
+                                      color: hasAccount
+                                          ? AppColors.primary
+                                          : AppColors.grey400,
+                                    ),
+                                  ),
+                                )
+                              : Icon(
+                                  Icons.person,
+                                  color: hasAccount
+                                      ? AppColors.primary
+                                      : AppColors.grey400,
+                                ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          name.length > 12
+                              ? '${name.substring(0, 12)}...'
+                              : name,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight:
+                                hasAccount ? FontWeight.w600 : FontWeight.w400,
+                            color: isDark ? AppColors.white : AppColors.grey800,
+                          ),
+                          textAlign: TextAlign.center,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      );
+    });
+  }
+
+  Widget _buildContactsSection(bool isDark) {
+    return Obx(() {
+      final contacts = ContactService.to.platformContacts;
+
+      if (contacts.isEmpty) {
+        return const SizedBox.shrink();
+      }
+
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Contacts UBAY',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                  color: isDark ? AppColors.white : AppColors.grey900,
+                ),
+              ),
+              if (contacts.length > 5)
+                TextButton(
+                  onPressed: () {
+                    // Show all contacts
+                  },
+                  child: Text(
+                    'Voir tout',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 100,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: contacts.take(10).length,
+              itemBuilder: (context, index) {
+                final contact = contacts[index];
+                return GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _recipientController.text = contact.phone;
+                    });
+                    Get.snackbar(
+                      'Contact sélectionné',
+                      contact.name,
+                      snackPosition: SnackPosition.BOTTOM,
+                      backgroundColor: Colors.green,
+                      colorText: Colors.white,
+                    );
+                  },
+                  child: Container(
+                    width: 80,
+                    margin: const EdgeInsets.only(right: 12),
+                    child: Column(
+                      children: [
+                        CircleAvatar(
+                          radius: 30,
+                          backgroundColor: AppColors.primary.withOpacity(0.1),
+                          backgroundImage: contact.photoUrl != null
+                              ? NetworkImage(contact.photoUrl!)
+                              : null,
+                          child: contact.photoUrl == null
+                              ? Text(
+                                  contact.name.isNotEmpty
+                                      ? contact.name[0].toUpperCase()
+                                      : '?',
+                                  style: TextStyle(
+                                    fontSize: 20,
+                                    fontWeight: FontWeight.bold,
+                                    color: AppColors.primary,
+                                  ),
+                                )
+                              : null,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          contact.name.split(' ').first,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                            color: isDark ? AppColors.white : AppColors.grey900,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      );
+    });
+  }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// TRANSFER TYPE CHIP
+// ═════════════════════════════════════════════════════════════════════════════
+class _TransferTypeChip extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool isSelected;
+  final VoidCallback onTap;
+  final bool isDark;
+
+  const _TransferTypeChip({
+    required this.label,
+    required this.icon,
+    required this.isSelected,
+    required this.onTap,
+    required this.isDark,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+        decoration: BoxDecoration(
+          gradient: isSelected ? AppColors.primaryGradient : null,
+          color: isSelected
+              ? null
+              : isDark
+                  ? AppColors.grey800
+                  : AppColors.grey100,
+          borderRadius: BorderRadius.circular(AppConstants.radiusMD),
+          border: Border.all(
+            color: isSelected ? AppColors.primary : Colors.transparent,
+            width: 2,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 20,
+              color: isSelected
+                  ? Colors.white
+                  : isDark
+                      ? AppColors.grey400
+                      : AppColors.grey600,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: isSelected
+                    ? Colors.white
+                    : isDark
+                        ? AppColors.grey300
+                        : AppColors.grey700,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

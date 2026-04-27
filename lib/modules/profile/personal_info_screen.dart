@@ -1,12 +1,18 @@
 import 'dart:math';
+import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../core/constants/app_colors.dart';
 import '../../core/constants/app_constants.dart';
 import '../../data/models/user_model.dart';
 import '../../services/app_controller.dart';
+import '../../services/api_service.dart';
+import '../../services/auth_service.dart';
+import '../../services/database_service.dart';
 import '../../widgets/custom_button.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,6 +69,83 @@ class _PersonalInfoScreenState extends State<PersonalInfoScreen>
   void dispose() {
     _tabController.dispose();
     super.dispose();
+  }
+
+  // ── Helpers date (partagés entre les deux onglets) ────────────────────────
+  static const _frMonths = [
+    'janvier',
+    'février',
+    'mars',
+    'avril',
+    'mai',
+    'juin',
+    'juillet',
+    'août',
+    'septembre',
+    'octobre',
+    'novembre',
+    'décembre',
+  ];
+
+  String formatDate(DateTime d) =>
+      '${d.day} ${_frMonths[d.month - 1]} ${d.year}';
+
+  DateTime? parseDate(String? text) {
+    if (text == null || text.isEmpty) return null;
+    final parts = text.trim().split(' ');
+    if (parts.length < 3) return null;
+    final day = int.tryParse(parts[0]);
+    final month = _frMonths.indexOf(parts[1].toLowerCase()) + 1;
+    final year = int.tryParse(parts[parts.length - 1]);
+    if (day == null || month == 0 || year == null) return null;
+    try {
+      return DateTime(year, month, day);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  // Method to save user profile to database - accessible by both tabs
+  Future<Map<String, dynamic>?> saveUserProfileToDatabase(
+      String userId, Map<String, dynamic> data) async {
+    try {
+      debugPrint('Saving user profile to database: $data');
+      final result = await ApiService.updateUserProfile(userId, data);
+
+      if (result['success'] == true) {
+        debugPrint('Profile saved successfully to database');
+        Get.snackbar(
+          'Succès',
+          'Informations sauvegardées',
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: AppColors.success.withOpacity(0.9),
+          colorText: Colors.white,
+          duration: const Duration(seconds: 2),
+        );
+        return result;
+      } else {
+        debugPrint('Failed to save profile: ${result['error']}');
+        Get.snackbar(
+          'Erreur',
+          'Impossible de sauvegarder: ${result['error']}',
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: AppColors.error.withOpacity(0.9),
+          colorText: Colors.white,
+        );
+        return result;
+      }
+    } catch (e) {
+      debugPrint('Error saving profile: $e');
+      Get.snackbar(
+        'Erreur',
+        'Erreur lors de la sauvegarde',
+        snackPosition: SnackPosition.BOTTOM,
+        backgroundColor: AppColors.error.withOpacity(0.9),
+        colorText: Colors.white,
+      );
+      return null;
+    }
+    return null;
   }
 
   @override
@@ -391,19 +474,35 @@ class _ProfileTab extends StatelessWidget {
       builder: (_) => _EditSheet(
         isDark: isDark,
         title: 'Modifier le contact',
-        onSave: () {
+        onSave: () async {
           final currentUser = AppController.to.user.value;
           if (currentUser != null) {
-            AppController.to.updateUser(
-              currentUser.copyWith(
+            // Save to database via API
+            final result = await context
+                .findAncestorStateOfType<_PersonalInfoScreenState>()
+                ?.saveUserProfileToDatabase(currentUser.id, {
+              'firstName': firstCtrl.text.trim(),
+              'lastName': lastCtrl.text.trim(),
+              'email': emailCtrl.text.trim(),
+              'phone': phoneCtrl.text.trim(),
+            });
+
+            if (result?['success'] == true) {
+              // Mettre à jour le state local après succès
+              final updatedUser = currentUser.copyWith(
                 firstName: firstCtrl.text.trim(),
                 lastName: lastCtrl.text.trim(),
                 email: emailCtrl.text.trim(),
                 phone: phoneCtrl.text.trim(),
-              ),
-            );
+              );
+              AppController.to.updateUser(updatedUser);
+
+              // Rafraîchir depuis le serveur
+              await DatabaseService.to.refreshUserData();
+
+              Get.back();
+            }
           }
-          Get.back();
         },
         fields: [
           _FieldConfig(label: 'Prénom', controller: firstCtrl),
@@ -422,9 +521,12 @@ class _ProfileTab extends StatelessWidget {
   }
 
   void _showBirthSheet(BuildContext context, bool isDark, UserModel user) {
-    final birthDateCtrl = TextEditingController(text: user.birthDate ?? '');
+    final parentState =
+        context.findAncestorStateOfType<_PersonalInfoScreenState>();
+    DateTime? selectedDate = parentState?.parseDate(user.birthDate);
+    String? selectedDateString = user.birthDate;
     final birthPlaceCtrl = TextEditingController(text: user.birthPlace ?? '');
-    String selectedGender = user.gender ?? 'Non précisé';
+    String selectedGender = user.gender ?? 'Masculin';
 
     showModalBottomSheet(
       context: context,
@@ -434,21 +536,81 @@ class _ProfileTab extends StatelessWidget {
         builder: (ctx, setSheetState) => _EditSheet(
           isDark: isDark,
           title: 'Modifier la naissance',
-          onSave: () {
+          onSave: () async {
             final currentUser = AppController.to.user.value;
             if (currentUser != null) {
-              AppController.to.updateUser(
-                currentUser.copyWith(
-                  birthDate: birthDateCtrl.text.trim(),
+              // Préparer les données au format ISO pour l'API
+              final isoDate = selectedDate != null
+                  ? '${selectedDate!.year}-${selectedDate!.month.toString().padLeft(2, '0')}-${selectedDate!.day.toString().padLeft(2, '0')}'
+                  : selectedDateString;
+              final apiGender = selectedGender == 'Masculin'
+                  ? 'male'
+                  : (selectedGender == 'Féminin' ? 'female' : 'other');
+
+              // Save to database via API
+              final result = await context
+                  .findAncestorStateOfType<_PersonalInfoScreenState>()
+                  ?.saveUserProfileToDatabase(currentUser.id, {
+                'birthDate': isoDate,
+                'birthPlace': birthPlaceCtrl.text.trim(),
+                'gender': apiGender,
+              });
+
+              if (result?['success'] == true) {
+                // Mettre à jour le state local avec les données correctes
+                final updatedUser = currentUser.copyWith(
+                  birthDate: isoDate,
                   birthPlace: birthPlaceCtrl.text.trim(),
                   gender: selectedGender,
-                ),
-              );
+                );
+                AppController.to.updateUser(updatedUser);
+
+                // Rafraîchir depuis le serveur pour synchroniser
+                await DatabaseService.to.refreshUserData();
+
+                Get.back();
+              }
             }
-            Get.back();
           },
           fields: [
-            _FieldConfig(label: 'Date de naissance', controller: birthDateCtrl),
+            // Champ Date de naissance avec sélecteur
+            _FieldConfig(
+              label: 'Date de naissance',
+              controller: TextEditingController(
+                text: selectedDateString ?? '',
+              ),
+              readOnly: true,
+              onTap: () async {
+                final DateTime? picked = await showDatePicker(
+                  context: ctx,
+                  initialDate: selectedDate ?? DateTime(1990),
+                  firstDate: DateTime(1900),
+                  lastDate: DateTime.now(),
+                  locale: const Locale('fr', 'FR'),
+                  builder: (context, child) {
+                    return Theme(
+                      data: Theme.of(context).copyWith(
+                        colorScheme: ColorScheme.light(
+                          primary: AppColors.primary,
+                          onPrimary: Colors.white,
+                          surface: isDark ? AppColors.cardDark : Colors.white,
+                          onSurface: isDark
+                              ? AppColors.textOnDark
+                              : AppColors.textPrimary,
+                        ),
+                      ),
+                      child: child!,
+                    );
+                  },
+                );
+                if (picked != null) {
+                  setSheetState(() {
+                    selectedDate = picked;
+                    selectedDateString = parentState?.formatDate(picked);
+                  });
+                }
+              },
+            ),
             _FieldConfig(
                 label: 'Lieu de naissance', controller: birthPlaceCtrl),
           ],
@@ -468,8 +630,8 @@ class _ProfileTab extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Wrap(
-                spacing: 8,
-                children: ['Masculin', 'Féminin', 'Non précisé']
+                spacing: 12,
+                children: ['Masculin', 'Féminin']
                     .map((g) => ChoiceChip(
                           label: Text(g),
                           selected: selectedGender == g,
@@ -519,17 +681,32 @@ class _ProfileTab extends StatelessWidget {
       builder: (_) => _EditSheet(
         isDark: isDark,
         title: 'Modifier la profession',
-        onSave: () {
+        onSave: () async {
           final currentUser = AppController.to.user.value;
           if (currentUser != null) {
-            AppController.to.updateUser(
-              currentUser.copyWith(
+            // Save to database via API
+            final result = await context
+                .findAncestorStateOfType<_PersonalInfoScreenState>()
+                ?.saveUserProfileToDatabase(currentUser.id, {
+              'profession': profCtrl.text.trim(),
+              'employer': empCtrl.text.trim(),
+            });
+
+            if (result?['success'] == true) {
+              // Mettre à jour le state local après succès
+              final updatedUser = currentUser.copyWith(
                 profession: profCtrl.text.trim(),
                 employer: empCtrl.text.trim(),
-              ),
-            );
+              );
+              AppController.to.updateUser(updatedUser);
+
+              // Rafraîchir depuis le serveur
+              await DatabaseService.to.refreshUserData();
+
+              Get.back();
+              Get.back();
+            }
           }
-          Get.back();
         },
         fields: [
           _FieldConfig(label: 'Profession', controller: profCtrl),
@@ -552,18 +729,33 @@ class _ProfileTab extends StatelessWidget {
       builder: (_) => _EditSheet(
         isDark: isDark,
         title: 'Modifier la résidence',
-        onSave: () {
+        onSave: () async {
           final currentUser = AppController.to.user.value;
           if (currentUser != null) {
-            AppController.to.updateUser(
-              currentUser.copyWith(
+            // Save to database via API
+            final result = await context
+                .findAncestorStateOfType<_PersonalInfoScreenState>()
+                ?.saveUserProfileToDatabase(currentUser.id, {
+              'city': cityCtrl.text.trim(),
+              'commune': communeCtrl.text.trim(),
+              'neighborhood': neighborhoodCtrl.text.trim(),
+            });
+
+            if (result?['success'] == true) {
+              // Mettre à jour le state local après succès
+              final updatedUser = currentUser.copyWith(
                 city: cityCtrl.text.trim(),
                 commune: communeCtrl.text.trim(),
                 neighborhood: neighborhoodCtrl.text.trim(),
-              ),
-            );
+              );
+              AppController.to.updateUser(updatedUser);
+
+              // Rafraîchir depuis le serveur
+              await DatabaseService.to.refreshUserData();
+
+              Get.back();
+            }
           }
-          Get.back();
         },
         fields: [
           _FieldConfig(label: 'Ville de résidence', controller: cityCtrl),
@@ -747,11 +939,15 @@ class _FieldConfig {
   final String label;
   final TextEditingController controller;
   final TextInputType keyboardType;
+  final bool readOnly;
+  final VoidCallback? onTap;
 
   const _FieldConfig({
     required this.label,
     required this.controller,
     this.keyboardType = TextInputType.text,
+    this.readOnly = false,
+    this.onTap,
   });
 }
 
@@ -877,6 +1073,8 @@ class _EditSheet extends StatelessWidget {
         TextField(
           controller: f.controller,
           keyboardType: f.keyboardType,
+          readOnly: f.readOnly,
+          onTap: f.onTap,
           style: TextStyle(
             fontSize: 14,
             color: isDark ? AppColors.textOnDark : AppColors.textPrimary,
@@ -906,6 +1104,10 @@ class _EditSheet extends StatelessWidget {
             fillColor: isDark
                 ? AppColors.backgroundDark.withOpacity(0.5)
                 : AppColors.backgroundLight,
+            suffixIcon: f.readOnly && f.onTap != null
+                ? const Icon(Icons.calendar_today_rounded,
+                    color: AppColors.primary, size: 20)
+                : null,
           ),
         ),
       ],
@@ -942,6 +1144,15 @@ class _DocumentTabState extends State<_DocumentTab> {
     if (year < 2026) return 'expired';
     if (year == 2026) return 'expiring';
     return 'valid';
+  }
+
+  // Get image path: local if just picked, otherwise MinIO URL from user
+  String? _getFrontImagePath(UserModel? user) {
+    return _frontImagePath ?? user?.idFrontImage;
+  }
+
+  String? _getBackImagePath(UserModel? user) {
+    return _backImagePath ?? user?.idBackImage;
   }
 
   @override
@@ -1095,6 +1306,7 @@ class _DocumentTabState extends State<_DocumentTab> {
   }
 
   Widget _buildPhotoSection() {
+    final user = AppController.to.user.value;
     return Container(
       decoration: BoxDecoration(
         color: _isDark ? AppColors.cardDark : AppColors.white,
@@ -1157,7 +1369,7 @@ class _DocumentTabState extends State<_DocumentTab> {
                       child: _DocumentPhotoCard(
                         isDark: _isDark,
                         label: 'Recto',
-                        imagePath: _frontImagePath,
+                        imagePath: _getFrontImagePath(user),
                         onTap: () => _showImageSourceSheet(isFront: true),
                       ),
                     ),
@@ -1166,7 +1378,7 @@ class _DocumentTabState extends State<_DocumentTab> {
                       child: _DocumentPhotoCard(
                         isDark: _isDark,
                         label: 'Verso',
-                        imagePath: _backImagePath,
+                        imagePath: _getBackImagePath(user),
                         onTap: () => _showImageSourceSheet(isFront: false),
                       ),
                     ),
@@ -1179,7 +1391,8 @@ class _DocumentTabState extends State<_DocumentTab> {
                 SizedBox(
                   width: double.infinity,
                   height: 50,
-                  child: _frontImagePath != null && _backImagePath != null
+                  child: _getFrontImagePath(user) != null &&
+                          _getBackImagePath(user) != null
                       ? DecoratedBox(
                           decoration: BoxDecoration(
                             gradient: AppColors.primaryGradient,
@@ -1292,16 +1505,12 @@ class _DocumentTabState extends State<_DocumentTab> {
               icon: Icons.camera_alt_rounded,
               label: 'Prendre une photo',
               color: AppColors.info,
-              onTap: () {
+              onTap: () async {
                 Get.back();
-                setState(() {
-                  if (isFront) {
-                    _frontImagePath = 'mock_front';
-                  } else {
-                    _backImagePath = 'mock_back';
-                  }
-                  _analysisComplete = false;
-                });
+                await _pickAndUploadImage(
+                  source: ImageSource.camera,
+                  isFront: isFront,
+                );
               },
             ),
             const SizedBox(height: 10),
@@ -1310,22 +1519,119 @@ class _DocumentTabState extends State<_DocumentTab> {
               icon: Icons.photo_library_rounded,
               label: 'Choisir depuis la galerie',
               color: AppColors.primary,
-              onTap: () {
+              onTap: () async {
                 Get.back();
-                setState(() {
-                  if (isFront) {
-                    _frontImagePath = 'mock_front';
-                  } else {
-                    _backImagePath = 'mock_back';
-                  }
-                  _analysisComplete = false;
-                });
+                await _pickAndUploadImage(
+                  source: ImageSource.gallery,
+                  isFront: isFront,
+                );
               },
             ),
           ],
         ),
       ),
     );
+  }
+
+  Future<void> _pickAndUploadImage({
+    required ImageSource source,
+    required bool isFront,
+  }) async {
+    try {
+      final picker = ImagePicker();
+      final pickedFile = await picker.pickImage(
+        source: source,
+        maxWidth: 1200,
+        maxHeight: 1200,
+        imageQuality: 85,
+      );
+
+      if (pickedFile == null) return;
+
+      // Show loading indicator
+      Get.dialog(
+        const Center(child: CircularProgressIndicator()),
+        barrierDismissible: false,
+      );
+
+      // Vérifier la taille avant upload (max 10MB pour le serveur)
+      final bytes = await pickedFile.readAsBytes();
+      if (bytes.length > 10 * 1024 * 1024) {
+        Get.back();
+        Get.snackbar(
+          'Erreur',
+          'L\'image est trop volumineuse. Veuillez choisir une image plus petite.',
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: AppColors.error.withOpacity(0.9),
+          colorText: Colors.white,
+        );
+        return;
+      }
+
+      // Update local state first
+      setState(() {
+        if (isFront) {
+          _frontImagePath = pickedFile.path;
+        } else {
+          _backImagePath = pickedFile.path;
+        }
+        _analysisComplete = false;
+      });
+
+      // Get current user
+      final currentUser = AppController.to.user.value;
+      if (currentUser == null) {
+        Get.back(); // Close loading
+        return;
+      }
+
+      // Upload to server using file upload
+      final result = await ApiService.uploadUserDocumentFile(
+        currentUser.id,
+        isFront ? 'id_front' : 'id_back',
+        pickedFile.path,
+        pickedFile.name,
+      );
+
+      Get.back(); // Close loading
+
+      if (result['success'] == true) {
+        // Update user with new document URL
+        final imageUrl = result['data']['imageUrl'];
+        final updatedUser = currentUser.copyWith(
+          idFrontImage: isFront ? imageUrl : currentUser.idFrontImage,
+          idBackImage: !isFront ? imageUrl : currentUser.idBackImage,
+        );
+        AppController.to.updateUser(updatedUser);
+
+        Get.snackbar(
+          'Succès',
+          'Document téléchargé avec succès',
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: AppColors.success.withOpacity(0.9),
+          colorText: Colors.white,
+          duration: const Duration(seconds: 2),
+        );
+      } else {
+        Get.snackbar(
+          'Erreur',
+          'Échec du téléchargement: ${result['error']}',
+          snackPosition: SnackPosition.BOTTOM,
+          backgroundColor: AppColors.error.withOpacity(0.9),
+          colorText: Colors.white,
+        );
+      }
+    } catch (e) {
+      debugPrint('Error picking/uploading image: $e');
+      Get.back(); // Close loading if open
+      Get.snackbar(
+        'Erreur',
+        'Erreur lors du traitement de l\'image',
+        snackPosition: SnackPosition.BOTTOM,
+        backgroundColor: AppColors.error.withOpacity(0.9),
+        colorText: Colors.white,
+      );
+    }
   }
 
   void _runAnalysis() {
@@ -1355,56 +1661,35 @@ class _DocumentTabState extends State<_DocumentTab> {
       builder: (_) => _EditSheet(
         isDark: _isDark,
         title: 'Modifier la nationalité',
-        onSave: () {
+        onSave: () async {
           final currentUser = AppController.to.user.value;
           if (currentUser != null) {
-            AppController.to.updateUser(
-              currentUser.copyWith(
+            // Save to database via API
+            final result = await context
+                .findAncestorStateOfType<_PersonalInfoScreenState>()
+                ?.saveUserProfileToDatabase(currentUser.id, {
+              'nationality': natCtrl.text.trim(),
+            });
+
+            if (result?['success'] == true) {
+              // Mettre à jour le state local après succès
+              final updatedUser = currentUser.copyWith(
                 nationality: natCtrl.text.trim(),
-              ),
-            );
+              );
+              AppController.to.updateUser(updatedUser);
+
+              // Rafraîchir depuis le serveur
+              await DatabaseService.to.refreshUserData();
+
+              Get.back();
+            }
           }
-          Get.back();
         },
         fields: [
           _FieldConfig(label: 'Pays de nationalité', controller: natCtrl),
         ],
       ),
     );
-  }
-
-  // ── Helpers date ─────────────────────────────────────────────────────────
-  static const _frMonths = [
-    'janvier',
-    'février',
-    'mars',
-    'avril',
-    'mai',
-    'juin',
-    'juillet',
-    'août',
-    'septembre',
-    'octobre',
-    'novembre',
-    'décembre',
-  ];
-
-  String _formatDate(DateTime d) =>
-      '${d.day} ${_frMonths[d.month - 1]} ${d.year}';
-
-  DateTime? _parseDate(String? text) {
-    if (text == null || text.isEmpty) return null;
-    final parts = text.trim().split(' ');
-    if (parts.length < 3) return null;
-    final day = int.tryParse(parts[0]);
-    final month = _frMonths.indexOf(parts[1].toLowerCase()) + 1;
-    final year = int.tryParse(parts[parts.length - 1]);
-    if (day == null || month == 0 || year == null) return null;
-    try {
-      return DateTime(year, month, day);
-    } catch (_) {
-      return null;
-    }
   }
 
   // ── Sélection du type de document ────────────────────────────────────────
@@ -1651,15 +1936,25 @@ class _DocumentTabState extends State<_DocumentTab> {
                       ],
                     ),
                     child: ElevatedButton(
-                      onPressed: () {
+                      onPressed: () async {
                         final currentUser = AppController.to.user.value;
                         if (currentUser != null) {
-                          AppController.to.updateUser(
-                            currentUser.copyWith(
-                              idCountry: countryCtrl.text.trim(),
-                              idType: selectedType,
-                            ),
+                          final updatedUser = currentUser.copyWith(
+                            idCountry: countryCtrl.text.trim(),
+                            idType: selectedType,
                           );
+
+                          // Update local state
+                          AppController.to.updateUser(updatedUser);
+
+                          // Save to database via API
+                          await context
+                              .findAncestorStateOfType<
+                                  _PersonalInfoScreenState>()
+                              ?.saveUserProfileToDatabase(currentUser.id, {
+                            'idCountry': countryCtrl.text.trim(),
+                            'idType': selectedType,
+                          });
                         }
                         Get.back();
                       },
@@ -1699,9 +1994,11 @@ class _DocumentTabState extends State<_DocumentTab> {
 
   // ── Numéro + dates avec date picker ──────────────────────────────────────
   void _showDocNumberSheet(BuildContext context, UserModel user) {
+    final parentState =
+        context.findAncestorStateOfType<_PersonalInfoScreenState>();
     final numCtrl = TextEditingController(text: user.idNumber ?? '');
-    DateTime? issueDate = _parseDate(user.idIssueDate);
-    DateTime? expiryDate = _parseDate(user.idExpiryDate.toString());
+    DateTime? issueDate = parentState?.parseDate(user.idIssueDate);
+    DateTime? expiryDate = parentState?.parseDate(user.idExpiryDate.toString());
     final now = DateTime.now();
 
     showModalBottomSheet(
@@ -1851,17 +2148,29 @@ class _DocumentTabState extends State<_DocumentTab> {
                       ],
                     ),
                     child: ElevatedButton(
-                      onPressed: () {
+                      onPressed: () async {
                         final currentUser = AppController.to.user.value;
                         if (currentUser != null) {
-                          AppController.to.updateUser(
-                            currentUser.copyWith(
-                              idNumber: numCtrl.text.trim(),
-                              idIssueDate: issueDate != null
-                                  ? _formatDate(issueDate!)
-                                  : null,
-                            ),
+                          final updatedUser = currentUser.copyWith(
+                            idNumber: numCtrl.text.trim(),
+                            idIssueDate: issueDate != null
+                                ? parentState?.formatDate(issueDate!)
+                                : null,
                           );
+
+                          // Update local state
+                          AppController.to.updateUser(updatedUser);
+
+                          // Save to database via API
+                          await context
+                              .findAncestorStateOfType<
+                                  _PersonalInfoScreenState>()
+                              ?.saveUserProfileToDatabase(currentUser.id, {
+                            'idNumber': numCtrl.text.trim(),
+                            'idIssueDate': issueDate != null
+                                ? parentState?.formatDate(issueDate!)
+                                : null,
+                          });
                         }
                         Get.back();
                       },
@@ -2354,7 +2663,7 @@ class _DocumentPhotoCard extends StatelessWidget {
               : null,
         ),
         child: hasImage
-            ? _MockDocumentCard(label: label)
+            ? _buildImageWidget(imagePath!, label)
             : Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
@@ -2385,6 +2694,142 @@ class _DocumentPhotoCard extends StatelessWidget {
       ),
     );
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Image Widget - Display real images from MinIO or local
+// ─────────────────────────────────────────────────────────────────────────────
+Widget _buildImageWidget(String imagePath, String label) {
+  // Check if it's a network URL (MinIO)
+  final isNetworkUrl =
+      imagePath.startsWith('http://') || imagePath.startsWith('https://');
+
+  if (isNetworkUrl) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Image.network(
+            imagePath,
+            fit: BoxFit.cover,
+            loadingBuilder: (context, child, loadingProgress) {
+              if (loadingProgress == null) return child;
+              return Container(
+                color: Colors.grey[800],
+                child: Center(
+                  child: CircularProgressIndicator(
+                    value: loadingProgress.expectedTotalBytes != null
+                        ? loadingProgress.cumulativeBytesLoaded /
+                            loadingProgress.expectedTotalBytes!
+                        : null,
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                ),
+              );
+            },
+            errorBuilder: (context, error, stackTrace) {
+              return Container(
+                color: Colors.grey[800],
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.broken_image,
+                        color: Colors.white.withOpacity(0.5), size: 24),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Erreur chargement',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.7),
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+          // Label overlay
+          Positioned(
+            top: 8,
+            right: 8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                label.toUpperCase(),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Local file path - display actual image
+  return ClipRRect(
+    borderRadius: BorderRadius.circular(12),
+    child: Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.file(
+          File(imagePath),
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) {
+            return Container(
+              color: Colors.grey[800],
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.broken_image,
+                      color: Colors.white.withOpacity(0.5), size: 24),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Erreur chargement',
+                    style: TextStyle(
+                      color: Colors.white.withOpacity(0.7),
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        ),
+        // Label overlay
+        Positioned(
+          top: 8,
+          right: 8,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.6),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              label.toUpperCase(),
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

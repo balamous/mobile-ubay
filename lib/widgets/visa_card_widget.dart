@@ -21,6 +21,7 @@ class CardCarousel extends StatefulWidget {
   final List<CardModel> cards;
   final bool showDetails;
   final void Function(int index)? onCardTap;
+  final void Function(int index)? onPageChanged;
   final double height;
 
   const CardCarousel({
@@ -28,6 +29,7 @@ class CardCarousel extends StatefulWidget {
     required this.cards,
     this.showDetails = false,
     this.onCardTap,
+    this.onPageChanged,
     this.height = 210,
   });
 
@@ -55,7 +57,10 @@ class _CardCarouselState extends State<CardCarousel> {
           child: PageView.builder(
             controller: _pageCtrl,
             itemCount: widget.cards.length,
-            onPageChanged: (i) => setState(() => _current = i),
+            onPageChanged: (i) {
+              setState(() => _current = i);
+              widget.onPageChanged?.call(i);
+            },
             itemBuilder: (_, i) {
               return AnimatedScale(
                 scale: _current == i ? 1.0 : 0.93,
@@ -86,9 +91,7 @@ class _CardCarouselState extends State<CardCarousel> {
                 width: _current == i ? 20 : 6,
                 height: 6,
                 decoration: BoxDecoration(
-                  color: _current == i
-                      ? AppColors.primary
-                      : AppColors.grey300,
+                  color: _current == i ? AppColors.primary : AppColors.grey300,
                   borderRadius: BorderRadius.circular(3),
                 ),
               );

@@ -286,7 +286,7 @@ class _ServiceCard extends StatelessWidget {
               Text(
                 service['fixedAmount'] != null
                     ? AppFormatters.formatCurrencyCompact(
-                        service['fixedAmount'] as double)
+                        (service['fixedAmount'] as num).toDouble())
                     : 'Montant variable',
                 style: TextStyle(
                   fontSize: 11,
@@ -335,8 +335,10 @@ class _ServicePaymentSheetState extends State<_ServicePaymentSheet> {
   void initState() {
     super.initState();
     if (widget.service['fixedAmount'] != null) {
+      final amount = widget.service['fixedAmount'];
       _amountCtrl.text =
-          (widget.service['fixedAmount'] as double).toInt().toString();
+          (amount is num ? amount.toInt() : int.parse(amount.toString()))
+              .toString();
     }
   }
 
@@ -363,9 +365,26 @@ class _ServicePaymentSheetState extends State<_ServicePaymentSheet> {
     }
   }
 
+  bool get _canSubmit {
+    final amountText = _amountCtrl.text;
+    final amount = double.tryParse(amountText);
+    final balance = _appCtrl.user.value?.balance ?? 0;
+
+    // Pour les services avec montant fixe, pas besoin de client ID
+    // Pour les services avec montant variable, client ID requis
+    final hasValidClient = widget.service['fixedAmount'] != null
+        ? true
+        : _clientCtrl.text.isNotEmpty;
+
+    final hasValidAmount = amount != null && amount > 0;
+    final hasSufficientBalance = amount != null && amount <= balance;
+
+    return hasValidClient && hasValidAmount && hasSufficientBalance;
+  }
+
   Future<void> _pay() async {
     final amount = double.tryParse(_amountCtrl.text) ?? 0;
-    if (amount <= 0 || _clientCtrl.text.isEmpty) return;
+    if (!_canSubmit) return;
 
     final confirmed = await BiometricGuard.show(
       context,
@@ -388,7 +407,8 @@ class _ServicePaymentSheetState extends State<_ServicePaymentSheet> {
     );
 
     if (success) {
-      _appCtrl.updateBalance(-amount);
+      // Rafraîchir les données utilisateur depuis le serveur
+      await DatabaseService.to.refreshUserData();
     }
     setState(() => _isLoading = false);
     Get.back();
@@ -504,7 +524,7 @@ class _ServicePaymentSheetState extends State<_ServicePaymentSheet> {
                     ),
                     Text(
                       AppFormatters.formatCurrency(
-                          widget.service['fixedAmount'] as double),
+                          (widget.service['fixedAmount'] as num).toDouble()),
                       style: TextStyle(
                         fontSize: 16,
                         fontWeight: FontWeight.w800,
@@ -516,14 +536,14 @@ class _ServicePaymentSheetState extends State<_ServicePaymentSheet> {
               ),
               const SizedBox(height: 16),
             ],
-            CustomButton(
-              label: _isLoading ? 'Traitement...' : 'Payer',
-              isLoading: _isLoading,
-              onPressed: _clientCtrl.text.isNotEmpty ? _pay : null,
-              gradient: LinearGradient(
-                colors: [_color.withOpacity(0.9), _color],
-              ),
-            ),
+            Obx(() => CustomButton(
+                  label: _isLoading ? 'Traitement...' : 'Payer',
+                  isLoading: _isLoading,
+                  onPressed: _canSubmit ? _pay : null,
+                  gradient: LinearGradient(
+                    colors: [_color.withOpacity(0.9), _color],
+                  ),
+                )),
           ],
         ),
       ),

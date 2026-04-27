@@ -1,21 +1,158 @@
 const express = require('express');
 const cors = require('cors');
+const multer = require('multer');
 const { Pool } = require('pg');
+const { Client } = require('minio');
+const { createServer } = require('http');
+const { Server } = require('socket.io');
 
 const app = express();
 const PORT = process.env.API_PORT || 3000;
+
+// Create HTTP server for WebSocket
+const httpServer = createServer(app);
+
+// Configure Socket.IO
+const io = new Server(httpServer, {
+  cors: {
+    origin: ['http://localhost:8080', 'http://localhost:8081', 'http://127.0.0.1:8080', 'http://127.0.0.1:8081', 'http://localhost:3000'],
+    credentials: true,
+    methods: ['GET', 'POST']
+  }
+});
+
+// Store connected users: userId -> socketId
+const connectedUsers = new Map();
+
+// WebSocket connection handler
+io.on('connection', (socket) => {
+  console.log('[WebSocket] Client connected:', socket.id);
+
+  // User authentication and room joining
+  socket.on('authenticate', (data) => {
+    const { userId } = data;
+    if (userId) {
+      connectedUsers.set(userId, socket.id);
+      socket.userId = userId;
+      socket.join(`user_${userId}`);
+      console.log(`[WebSocket] User ${userId} authenticated and joined room user_${userId}`);
+      socket.emit('authenticated', { success: true, userId });
+    }
+  });
+
+  // Handle disconnection
+  socket.on('disconnect', () => {
+    console.log('[WebSocket] Client disconnected:', socket.id);
+    if (socket.userId) {
+      connectedUsers.delete(socket.userId);
+    }
+  });
+});
+
+// Helper function to notify user of transaction
+function notifyUserTransaction(userId, transaction) {
+  const socketId = connectedUsers.get(userId);
+  if (socketId) {
+    io.to(`user_${userId}`).emit('new_transaction', {
+      type: 'transaction',
+      data: transaction,
+      timestamp: new Date().toISOString()
+    });
+    console.log(`[WebSocket] Transaction notification sent to user ${userId}`);
+    return true;
+  }
+  console.log(`[WebSocket] User ${userId} not connected, notification queued`);
+  return false;
+}
+
+// Helper function to notify balance update
+function notifyBalanceUpdate(userId, balance) {
+  const socketId = connectedUsers.get(userId);
+  if (socketId) {
+    io.to(`user_${userId}`).emit('balance_update', {
+      type: 'balance',
+      data: { balance },
+      timestamp: new Date().toISOString()
+    });
+    console.log(`[WebSocket] Balance update sent to user ${userId}: ${balance}`);
+    return true;
+  }
+  return false;
+}
 
 // Middleware
 app.use(cors({
   origin: ['http://localhost:8080', 'http://localhost:8081', 'http://127.0.0.1:8080', 'http://127.0.0.1:8081'],
   credentials: true
 }));
-app.use(express.json());
+// Augmenter la limite pour accepter les images en base64 (50MB max)
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Database connection
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL || 'postgresql://fintech_admin:fintech_password_2024@db:5432/fintech_db',
 });
+
+// Helper function to convert French date format to ISO format
+function convertFrenchDateToISO(dateString) {
+  if (!dateString || typeof dateString !== 'string') return dateString;
+
+  // If already in ISO format (YYYY-MM-DD), return as-is
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateString)) {
+    return dateString;
+  }
+
+  // Parse French format: "27 avril 2026"
+  const monthNames = {
+    'janvier': '01', 'fevrier': '02', 'mars': '03', 'avril': '04',
+    'mai': '05', 'juin': '06', 'juillet': '07', 'aout': '08',
+    'septembre': '09', 'octobre': '10', 'novembre': '11', 'decembre': '12'
+  };
+
+  const parts = dateString.toLowerCase().trim().split(' ');
+  if (parts.length === 3) {
+    const day = parts[0].padStart(2, '0');
+    const month = monthNames[parts[1]];
+    const year = parts[2];
+
+    if (month) {
+      return `${year}-${month}-${day}`;
+    }
+  }
+
+  // If parsing fails, return original value
+  return dateString;
+}
+
+// MinIO configuration
+const minioEndpoint = (process.env.MINIO_ENDPOINT || 'localhost').replace('http://', '').replace('https://', '');
+const minioClient = new Client({
+  endPoint: minioEndpoint,
+  port: parseInt(process.env.MINIO_PORT) || 9000,
+  useSSL: false,
+  accessKey: process.env.MINIO_ACCESS_KEY || 'minioadmin',
+  secretKey: process.env.MINIO_SECRET_KEY || 'minioadmin123',
+});
+
+// Initialize MinIO bucket
+async function initializeMinIO() {
+  try {
+    const bucketName = process.env.MINIO_BUCKET || 'ubay-documents';
+    const bucketExists = await minioClient.bucketExists(bucketName);
+    
+    if (!bucketExists) {
+      await minioClient.makeBucket(bucketName, {
+        region: 'us-east-1',
+      });
+      console.log(`MinIO bucket '${bucketName}' created successfully`);
+    } else {
+      console.log(`MinIO bucket '${bucketName}' already exists`);
+    }
+  } catch (error) {
+    console.error('MinIO initialization error:', error);
+  }
+}
 
 // Health check
 app.get('/health', async (req, res) => {
@@ -179,8 +316,17 @@ app.post('/auth/register', async (req, res) => {
   }
 });
 
-// Get user profile endpoint
+// Get user profile endpoint - supporte les deux chemins pour compatibilité
 app.get('/users/profile', async (req, res) => {
+  // Forward to the main handler
+  handleGetProfile(req, res);
+});
+
+app.get('/api/profile', async (req, res) => {
+  handleGetProfile(req, res);
+});
+
+async function handleGetProfile(req, res) {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -228,6 +374,186 @@ app.get('/users/profile', async (req, res) => {
     res.status(500).json({
       success: false,
       error: 'Erreur serveur lors de la récupération du profil'
+    });
+  }
+}
+
+// Update user profile endpoint
+app.put('/api/users/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const updates = req.body;
+    
+    console.log('Updating user profile:', userId, updates);
+    
+    // Build dynamic query based on provided fields
+    const allowedFields = [
+      'first_name', 'last_name', 'email', 'phone', 'avatar_url',
+      'birth_date', 'birth_place', 'gender', 'profession', 'employer',
+      'city', 'commune', 'neighborhood', 'nationality',
+      'id_type', 'id_number', 'id_country', 'id_issue_date', 'id_expiry_date',
+      'id_front_image', 'id_back_image', 'address', 'postal_code'
+    ];
+    
+    const setClauses = [];
+    const values = [];
+    let paramIndex = 1;
+    
+    for (const [key, value] of Object.entries(updates)) {
+      // Convert camelCase to snake_case
+      const dbField = key.replace(/([A-Z])/g, '_$1').toLowerCase();
+
+      if (allowedFields.includes(dbField)) {
+        setClauses.push(`${dbField} = $${paramIndex}`);
+
+        // Convert French date format to ISO format for date fields
+        let processedValue = value;
+        if ((dbField === 'id_issue_date' || dbField === 'id_expiry_date' || dbField === 'birth_date') && value && typeof value === 'string') {
+          processedValue = convertFrenchDateToISO(value);
+        }
+
+        values.push(processedValue);
+        paramIndex++;
+      }
+    }
+    
+    if (setClauses.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Aucun champ valide à mettre à jour'
+      });
+    }
+    
+    // Add updated_at timestamp
+    setClauses.push(`updated_at = CURRENT_TIMESTAMP`);
+    
+    // Build and execute query
+    const query = `
+      UPDATE users 
+      SET ${setClauses.join(', ')} 
+      WHERE id = $${paramIndex} 
+      RETURNING *
+    `;
+    values.push(userId);
+    
+    console.log('Update query:', query);
+    console.log('Values:', values);
+    
+    const result = await pool.query(query, values);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Utilisateur non trouvé'
+      });
+    }
+    
+    const user = result.rows[0];
+    const { password: _, ...userWithoutPassword } = user;
+    
+    res.json({
+      success: true,
+      message: 'Profil mis à jour avec succès',
+      data: userWithoutPassword
+    });
+    
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur serveur lors de la mise à jour du profil'
+    });
+  }
+});
+
+// Configure multer for file uploads
+const upload = multer({ 
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024 // 10MB limit
+  }
+});
+
+// Upload document/image endpoint
+app.post('/api/users/:userId/documents', upload.single('file'), async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { documentType } = req.body;
+    const file = req.file;
+    
+    console.log('Uploading document for user:', userId, 'type:', documentType);
+    
+    if (!documentType || !file) {
+      return res.status(400).json({
+        success: false,
+        error: 'Type de document et fichier requis'
+      });
+    }
+    
+    // Validate document type
+    const allowedTypes = ['id_front', 'id_back', 'avatar', 'proof_address', 'other'];
+    if (!allowedTypes.includes(documentType)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Type de document non valide'
+      });
+    }
+    
+    // Generate unique filename
+    const fileName = `${userId}_${documentType}_${Date.now()}_${file.originalname}`;
+    const bucketName = process.env.MINIO_BUCKET || 'ubay-documents';
+    
+    // Upload to MinIO
+    await minioClient.putObject(bucketName, fileName, file.buffer);
+    
+    // Get public URL (accessible from outside)
+    const minioPublicUrl = process.env.MINIO_PUBLIC_URL || `http://localhost:9000`;
+    const imageUrl = `${minioPublicUrl}/${bucketName}/${fileName}`;
+    
+    // Map document type to database field
+    const fieldMap = {
+      'id_front': 'id_front_image',
+      'id_back': 'id_back_image',
+      'avatar': 'avatar_url'
+    };
+    
+    const dbField = fieldMap[documentType];
+    
+    if (dbField) {
+      // Update user record with document URL
+      const query = `
+        UPDATE users 
+        SET ${dbField} = $1, updated_at = CURRENT_TIMESTAMP 
+        WHERE id = $2 
+        RETURNING id, ${dbField}
+      `;
+      
+      const result = await pool.query(query, [imageUrl, userId]);
+      
+      if (result.rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: 'Utilisateur non trouvé'
+        });
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: 'Document téléchargé avec succès',
+      data: {
+        documentType,
+        fileName,
+        imageUrl,
+        uploadedAt: new Date().toISOString()
+      }
+    });
+    
+  } catch (error) {
+    console.error('Document upload error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur serveur lors du téléchargement du document'
     });
   }
 });
@@ -413,7 +739,7 @@ app.post('/api/transactions', async (req, res) => {
     const createTransactionsTable = `
       CREATE TABLE IF NOT EXISTS transactions (
         id VARCHAR(50) PRIMARY KEY,
-        user_id VARCHAR(50) NOT NULL,
+        user_id UUID NOT NULL,
         type VARCHAR(50) NOT NULL,
         amount DECIMAL(12,2) NOT NULL,
         description TEXT NOT NULL,
@@ -455,7 +781,7 @@ app.post('/api/transactions', async (req, res) => {
     // Create service categories table
     const createServiceCategoriesTable = `
       CREATE TABLE IF NOT EXISTS service_categories (
-        id VARCHAR(50) PRIMARY KEY,
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         name VARCHAR(100) NOT NULL UNIQUE,
         description TEXT,
         icon VARCHAR(50) NOT NULL,
@@ -470,8 +796,8 @@ app.post('/api/transactions', async (req, res) => {
     // Create services table
     const createServicesTable = `
       CREATE TABLE IF NOT EXISTS services (
-        id VARCHAR(50) PRIMARY KEY,
-        category_id VARCHAR(50) NOT NULL,
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        category_id UUID NOT NULL,
         name VARCHAR(100) NOT NULL,
         description TEXT NOT NULL,
         icon VARCHAR(50) NOT NULL,
@@ -489,9 +815,9 @@ app.post('/api/transactions', async (req, res) => {
     // Create service subscriptions table
     const createServiceSubscriptionsTable = `
       CREATE TABLE IF NOT EXISTS service_subscriptions (
-        id VARCHAR(50) PRIMARY KEY,
-        user_id VARCHAR(50) NOT NULL,
-        service_id VARCHAR(50) NOT NULL,
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL,
+        service_id UUID NOT NULL,
         status VARCHAR(20) DEFAULT 'active',
         amount DECIMAL(12,2) NOT NULL,
         next_billing_date DATE,
@@ -506,10 +832,10 @@ app.post('/api/transactions', async (req, res) => {
     // Create service transactions table
     const createServiceTransactionsTable = `
       CREATE TABLE IF NOT EXISTS service_transactions (
-        id VARCHAR(50) PRIMARY KEY,
-        user_id VARCHAR(50) NOT NULL,
-        service_id VARCHAR(50) NOT NULL,
-        subscription_id VARCHAR(50),
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        user_id UUID NOT NULL,
+        service_id UUID NOT NULL,
+        subscription_id UUID,
         amount DECIMAL(12,2) NOT NULL,
         status VARCHAR(20) DEFAULT 'completed',
         payment_method VARCHAR(50),
@@ -825,44 +1151,40 @@ app.post('/api/cards', async (req, res) => {
     // Insert card into database with all columns
     const query = `
       INSERT INTO cards (
-        id, user_id, card_number, card_holder, expiry_month, expiry_year, 
-        cvv, card_type, is_default, is_active, balance, limit_amount, 
-        created_at, updated_at, type, status, spent_amount, is_virtual, 
-        gradient_start, gradient_end
+        id, user_id, card_number, card_holder, expiry_month, expiry_year,
+        cvv, type, card_type, status, is_default, limit_amount, spent_amount, is_virtual,
+        gradient_start, gradient_end, created_at, updated_at
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 
-        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, $13, $14, $15, $16, $17, $18
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
       )
       RETURNING *
     `;
-    
+
     const values = [
       cardId,                                    // $1: id
       userId,                                    // $2: user_id
       cardNumber,                                // $3: card_number
-      cardHolderName,                            // $4: card_holder
+      cardHolderName.toUpperCase(),                            // $4: card_holder
       parseInt(expiryMonth),                     // $5: expiry_month
       parseInt(expiryYear),                      // $6: expiry_year
       cvv,                                       // $7: cvv
-      type,                                      // $8: card_type
-      false,                                     // $9: is_default
-      true,                                      // $10: is_active
-      0.00,                                      // $11: balance
+      type,                                      // $8: type
+      type,                                      // $9: card_type
+      'active',                                  // $10: status
+      false,                                     // $11: is_default
       1000000.00,                                // $12: limit_amount
-      type,                                      // $13: type
-      'active',                                  // $14: status
-      0.00,                                      // $15: spent_amount
-      isVirtual || false,                        // $16: is_virtual
-      formatGradient(gradientStart || selectedGradient.start),   // $17: gradient_start
-      formatGradient(gradientEnd || selectedGradient.end)        // $18: gradient_end
+      0.00,                                      // $13: spent_amount
+      isVirtual || false,                        // $14: is_virtual
+      formatGradient(gradientStart || selectedGradient.start),   // $15: gradient_start
+      formatGradient(gradientEnd || selectedGradient.end)        // $16: gradient_end
     ];
 
     const result = await pool.query(query, values);
     const createdCard = result.rows[0];
 
-    console.log('Card created successfully:', createdCard);
+    console.log('[TEST] Card created successfully:', createdCard);
 
-    res.json({
+    return res.status(201).json({
       success: true,
       data: {
         id: createdCard.id,
@@ -1567,9 +1889,631 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-app.listen(PORT, () => {
+// Migration function to add missing columns
+async function runMigrations() {
+  try {
+    console.log('Running migrations...');
+    
+    // Check if id_front_image column exists
+    const checkFrontImage = await pool.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'users' AND column_name = 'id_front_image'
+    `);
+    
+    if (checkFrontImage.rows.length === 0) {
+      console.log('Adding id_front_image column...');
+      await pool.query(`
+        ALTER TABLE users
+        ADD COLUMN id_front_image TEXT,
+        ADD COLUMN id_back_image TEXT
+      `);
+      console.log('Columns added successfully');
+    } else {
+      console.log('Columns already exist');
+    }
+
+    // Check and add id_issue_date column
+    const checkIdIssueDate = await pool.query(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_name = 'users' AND column_name = 'id_issue_date'
+    `);
+
+    if (checkIdIssueDate.rows.length === 0) {
+      console.log('Adding id_issue_date column...');
+      await pool.query(`
+        ALTER TABLE users
+        ADD COLUMN id_issue_date DATE
+      `);
+      console.log('id_issue_date column added successfully');
+    }
+
+    // Check and add id_expiry_date column
+    const checkIdExpiryDate = await pool.query(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_name = 'users' AND column_name = 'id_expiry_date'
+    `);
+
+    if (checkIdExpiryDate.rows.length === 0) {
+      console.log('Adding id_expiry_date column...');
+      await pool.query(`
+        ALTER TABLE users
+        ADD COLUMN id_expiry_date DATE
+      `);
+      console.log('id_expiry_date column added successfully');
+    }
+
+    // Fix transactions table - recreate with UUID if still VARCHAR
+    try {
+      const checkType = await pool.query(`
+        SELECT data_type FROM information_schema.columns 
+        WHERE table_name = 'transactions' AND column_name = 'user_id'
+      `);
+      
+      if (checkType.rows.length > 0 && checkType.rows[0].data_type === 'character varying') {
+        console.log('Recreating transactions table with UUID user_id...');
+        // Drop and recreate with correct types
+        await pool.query(`DROP TABLE IF EXISTS transactions`);
+        await pool.query(`
+          CREATE TABLE transactions (
+            id VARCHAR(50) PRIMARY KEY,
+            user_id UUID NOT NULL,
+            type VARCHAR(50) NOT NULL,
+            amount DECIMAL(12,2) NOT NULL,
+            description TEXT NOT NULL,
+            recipient VARCHAR(255),
+            category VARCHAR(100),
+            status VARCHAR(50) DEFAULT 'completed',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id)
+          )
+        `);
+        console.log('Transactions table recreated successfully');
+      } else {
+        console.log('Transactions table already has correct UUID type');
+      }
+    } catch (txError) {
+      console.log('Note: transactions table check:', txError.message);
+    }
+    
+    // Fix service tables - drop and recreate with proper UUID types
+    try {
+      console.log('Checking service tables for UUID migration...');
+      
+      // Check if any service table has wrong types
+      const checkServices = await pool.query(`
+        SELECT data_type FROM information_schema.columns 
+        WHERE table_name = 'services' AND column_name = 'id' LIMIT 1
+      `);
+      
+      if (checkServices.rows.length > 0 && checkServices.rows[0].data_type === 'character varying') {
+        console.log('Dropping all service tables with VARCHAR types...');
+        await pool.query(`DROP TABLE IF EXISTS service_transactions CASCADE`);
+        await pool.query(`DROP TABLE IF EXISTS service_subscriptions CASCADE`);
+        await pool.query(`DROP TABLE IF EXISTS services CASCADE`);
+        await pool.query(`DROP TABLE IF EXISTS service_categories CASCADE`);
+        console.log('All service tables dropped - will be recreated with UUID on next save');
+      } else {
+        console.log('Service tables already have correct UUID types or do not exist');
+      }
+    } catch (svcError) {
+      console.log('Note: service tables check:', svcError.message);
+    }
+    
+    // Create user_contacts table for storing transfer contacts
+    try {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS user_contacts (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          contact_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+          phone VARCHAR(20) NOT NULL,
+          name VARCHAR(255),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(user_id, phone)
+        )
+      `);
+      console.log('Table user_contacts checked/created');
+    } catch (contactError) {
+      console.log('Note: user_contacts table check:', contactError.message);
+    }
+
+    console.log('Migrations completed');
+  } catch (error) {
+    console.error('Migration error:', error);
+  }
+}
+
+httpServer.listen(PORT, async () => {
   console.log(`UBAY Simple API running on port ${PORT}`);
+  console.log(`WebSocket server active on port ${PORT}`);
   console.log(`Health check: http://localhost:${PORT}/health`);
+
+  // Run migrations
+  await runMigrations();
+  
+  // Initialize MinIO
+  await initializeMinIO();
+});
+
+// ========================================
+// TRANSFER ENDPOINT - Transfer between users
+// ========================================
+app.post('/api/transfer', async (req, res) => {
+  const client = await pool.connect();
+  
+  try {
+    const { senderId, recipientPhone, amount, description } = req.body;
+    
+    if (!senderId || !recipientPhone || !amount) {
+      return res.status(400).json({
+        success: false,
+        error: 'senderId, recipientPhone et amount sont requis'
+      });
+    }
+    
+    const transferAmount = parseFloat(amount);
+    if (isNaN(transferAmount) || transferAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Le montant doit être un nombre positif'
+      });
+    }
+    
+    // Start transaction
+    await client.query('BEGIN');
+    
+    // 1. Get sender and check balance
+    const senderQuery = 'SELECT * FROM users WHERE id = $1';
+    const senderResult = await client.query(senderQuery, [senderId]);
+    
+    if (senderResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        error: 'Expéditeur non trouvé'
+      });
+    }
+    
+    const sender = senderResult.rows[0];
+    const senderBalance = parseFloat(sender.balance);
+    
+    if (senderBalance < transferAmount) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        error: 'Solde insuffisant'
+      });
+    }
+    
+    // 2. Find recipient by phone
+    const recipientQuery = 'SELECT * FROM users WHERE phone = $1';
+    const recipientResult = await client.query(recipientQuery, [recipientPhone]);
+    
+    if (recipientResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        error: 'Destinataire non trouvé avec ce numéro de téléphone'
+      });
+    }
+    
+    const recipient = recipientResult.rows[0];
+    
+    // 3. Debit sender
+    const newSenderBalance = senderBalance - transferAmount;
+    await client.query(
+      'UPDATE users SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [newSenderBalance, senderId]
+    );
+    
+    // 4. Credit recipient
+    const recipientBalance = parseFloat(recipient.balance);
+    const newRecipientBalance = recipientBalance + transferAmount;
+    await client.query(
+      'UPDATE users SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [newRecipientBalance, recipient.id]
+    );
+    
+    // 5. Create transaction for sender (transfer_out)
+    const senderTxId = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    await client.query(
+      `INSERT INTO transactions (id, user_id, type, amount, description, recipient, category, status, created_at)
+       VALUES ($1, $2, 'transfer', $3, $4, $5, 'transfer', 'completed', CURRENT_TIMESTAMP)`,
+      [senderTxId, senderId, transferAmount, description || 'Transfert envoyé', recipientPhone]
+    );
+    
+    // 6. Create transaction for recipient (transfer_in)
+    const recipientTxId = `tx_${Date.now() + 1}_${Math.random().toString(36).substr(2, 9)}`;
+    await client.query(
+      `INSERT INTO transactions (id, user_id, type, amount, description, recipient, category, status, created_at)
+       VALUES ($1, $2, 'deposit', $3, $4, $5, 'receive', 'completed', CURRENT_TIMESTAMP)`,
+      [recipientTxId, recipient.id, transferAmount, `Reçu de ${sender.first_name} ${sender.last_name}`, sender.phone]
+    );
+    
+    // Commit transaction
+    await client.query('COMMIT');
+
+    // WebSocket notifications
+    try {
+      const senderName = `${senderResult.rows[0].first_name} ${senderResult.rows[0].last_name}`;
+      const recipientFullName = `${recipient.first_name} ${recipient.last_name}`;
+
+      // Notify sender of their transaction
+      notifyUserTransaction(senderId, {
+        id: senderTxId,
+        type: 'transfer_sent',
+        amount: -transferAmount,
+        description: `Transfert à ${recipientFullName}`,
+        recipient: recipientPhone,
+        recipientName: recipientFullName,
+        newBalance: newSenderBalance,
+        createdAt: new Date().toISOString()
+      });
+
+      // Notify recipient of incoming transfer
+      notifyUserTransaction(recipient.id, {
+        id: recipientTxId,
+        type: 'transfer_received',
+        amount: transferAmount,
+        description: `Reçu de ${senderName}`,
+        sender: senderResult.rows[0].phone,
+        senderName: senderName,
+        newBalance: newRecipientBalance,
+        createdAt: new Date().toISOString()
+      });
+
+      // Send balance updates
+      notifyBalanceUpdate(senderId, newSenderBalance);
+      notifyBalanceUpdate(recipientUser.id, newRecipientBalance);
+
+      console.log('[Transfer] WebSocket notifications sent');
+    } catch (wsError) {
+      console.error('[Transfer] WebSocket notification error (non-critical):', wsError);
+    }
+
+    // Add to user_contacts
+    try {
+      await pool.query(
+        `INSERT INTO user_contacts (user_id, contact_user_id, phone, name)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id, phone) DO UPDATE SET
+           contact_user_id = COALESCE(EXCLUDED.contact_user_id, user_contacts.contact_user_id),
+           name = COALESCE(EXCLUDED.name, user_contacts.name)`,
+        [
+          senderId,
+          recipient.id,
+          recipientPhone,
+          `${recipient.first_name} ${recipient.last_name}`
+        ]
+      );
+      console.log('[Transfer] Contact saved/updated');
+    } catch (contactError) {
+      console.log('[Transfer] Contact save error (non-critical):', contactError.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'Transfert effectué avec succès',
+      data: {
+        senderNewBalance: newSenderBalance,
+        recipientNewBalance: newRecipientBalance,
+        amount: transferAmount,
+        senderTxId: senderTxId,
+        recipientTxId: recipientTxId
+      }
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Transfer error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors du transfert'
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// ========================================
+// GET RECENT BENEFICIARIES - Users who received transfers
+// ========================================
+app.get('/api/beneficiaries/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'userId est requis'
+      });
+    }
+    
+    // Get unique recipients from transfer transactions
+    const query = `
+      SELECT DISTINCT
+        t.recipient as phone,
+        MAX(t.created_at) as last_transfer_date,
+        COUNT(*) as transfer_count
+      FROM transactions t
+      WHERE t.user_id = $1
+        AND t.type = 'transfer'
+        AND t.recipient IS NOT NULL
+      GROUP BY t.recipient
+      ORDER BY MAX(t.created_at) DESC
+      LIMIT 10
+    `;
+    
+    const result = await pool.query(query, [userId]);
+    
+    // Also get user details for each beneficiary
+    const beneficiaries = [];
+    for (const row of result.rows) {
+      // Check if recipient has an account
+      const userQuery = 'SELECT id, first_name, last_name, phone, photo_url FROM users WHERE phone = $1';
+      const userResult = await pool.query(userQuery, [row.phone]);
+      
+      const userName = userResult.rows.length > 0
+        ? `${userResult.rows[0].first_name} ${userResult.rows[0].last_name}`
+        : row.phone;
+
+      beneficiaries.push({
+        phone: row.phone,
+        name: userName,
+        lastTransferDate: row.last_transfer_date,
+        transferCount: parseInt(row.transfer_count),
+        hasAccount: userResult.rows.length > 0,
+        user: userResult.rows.length > 0 ? {
+          id: userResult.rows[0].id,
+          firstName: userResult.rows[0].first_name,
+          lastName: userResult.rows[0].last_name,
+          phone: userResult.rows[0].phone,
+          photoUrl: userResult.rows[0].photo_url
+        } : null
+      });
+    }
+    
+    res.json({
+      success: true,
+      data: {
+        beneficiaries: beneficiaries
+      }
+    });
+    
+  } catch (error) {
+    console.error('Get beneficiaries error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors de la récupération des bénéficiaires'
+    });
+  }
+});
+
+// ========================================
+// GET USER CONTACTS - Contacts for transfers
+// ========================================
+app.get('/api/contacts/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const query = `
+      SELECT 
+        uc.id,
+        uc.phone,
+        uc.name,
+        uc.contact_user_id,
+        uc.created_at,
+        u.first_name,
+        u.last_name,
+        u.photo_url,
+        u.phone as user_phone
+      FROM user_contacts uc
+      LEFT JOIN users u ON uc.contact_user_id = u.id
+      WHERE uc.user_id = $1
+      ORDER BY uc.created_at DESC
+    `;
+
+    const result = await pool.query(query, [userId]);
+
+    const contacts = result.rows.map(row => ({
+      id: row.id,
+      phone: row.phone,
+      name: row.name || `${row.first_name || ''} ${row.last_name || ''}`.trim() || row.phone,
+      contactUserId: row.contact_user_id,
+      hasAccount: !!row.contact_user_id,
+      photoUrl: row.photo_url,
+      createdAt: row.created_at
+    }));
+
+    res.json({
+      success: true,
+      data: { contacts }
+    });
+
+  } catch (error) {
+    console.error('Get contacts error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors de la récupération des contacts'
+    });
+  }
+});
+
+// ========================================
+// DEPOSIT ENDPOINT - Credit user balance
+// ========================================
+app.post('/api/deposit', async (req, res) => {
+  const client = await pool.connect();
+  
+  try {
+    const { userId, amount, description, paymentMethod } = req.body;
+    
+    if (!userId || !amount) {
+      return res.status(400).json({
+        success: false,
+        error: 'userId et amount sont requis'
+      });
+    }
+    
+    const depositAmount = parseFloat(amount);
+    if (isNaN(depositAmount) || depositAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Le montant doit être un nombre positif'
+      });
+    }
+    
+    // Start transaction
+    await client.query('BEGIN');
+    
+    // 1. Get user
+    const userQuery = 'SELECT * FROM users WHERE id = $1';
+    const userResult = await client.query(userQuery, [userId]);
+    
+    if (userResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        error: 'Utilisateur non trouvé'
+      });
+    }
+    
+    const user = userResult.rows[0];
+    const currentBalance = parseFloat(user.balance);
+    
+    // 2. Credit user balance
+    const newBalance = currentBalance + depositAmount;
+    await client.query(
+      'UPDATE users SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [newBalance, userId]
+    );
+    
+    // 3. Create transaction record
+    const txId = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    await client.query(
+      `INSERT INTO transactions (id, user_id, type, amount, description, recipient, category, status, created_at)
+       VALUES ($1, $2, 'deposit', $3, $4, $5, 'deposit', 'completed', CURRENT_TIMESTAMP)`,
+      [txId, userId, depositAmount, description || 'Dépôt', paymentMethod || 'Carte']
+    );
+    
+    // Commit transaction
+    await client.query('COMMIT');
+    
+    res.json({
+      success: true,
+      message: 'Dépôt effectué avec succès',
+      data: {
+        newBalance: newBalance,
+        amount: depositAmount,
+        transactionId: txId
+      }
+    });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Deposit error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors du dépôt'
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// ========================================
+// AIRTIME/WITHDRAWAL ENDPOINT - Debit user balance
+// ========================================
+app.post('/api/debit', async (req, res) => {
+  const client = await pool.connect();
+  
+  try {
+    const { userId, amount, description, category, recipient } = req.body;
+    
+    if (!userId || !amount) {
+      return res.status(400).json({
+        success: false,
+        error: 'userId et amount sont requis'
+      });
+    }
+    
+    const debitAmount = parseFloat(amount);
+    if (isNaN(debitAmount) || debitAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Le montant doit être un nombre positif'
+      });
+    }
+    
+    // Start transaction
+    await client.query('BEGIN');
+    
+    // 1. Get user and check balance
+    const userQuery = 'SELECT * FROM users WHERE id = $1';
+    const userResult = await client.query(userQuery, [userId]);
+    
+    if (userResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({
+        success: false,
+        error: 'Utilisateur non trouvé'
+      });
+    }
+    
+    const user = userResult.rows[0];
+    const currentBalance = parseFloat(user.balance);
+    
+    // Check sufficient balance
+    if (currentBalance < debitAmount) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        success: false,
+        error: 'Solde insuffisant'
+      });
+    }
+    
+    // 2. Debit user balance
+    const newBalance = currentBalance - debitAmount;
+    await client.query(
+      'UPDATE users SET balance = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [newBalance, userId]
+    );
+    
+    // 3. Create transaction record
+    const txId = `tx_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const txType = category === 'airtime' ? 'airtime' : 'withdrawal';
+    await client.query(
+      `INSERT INTO transactions (id, user_id, type, amount, description, recipient, category, status, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, 'completed', CURRENT_TIMESTAMP)`,
+      [txId, userId, txType, debitAmount, description || 'Débit', recipient || '', category || 'debit']
+    );
+    
+    // Commit transaction
+    await client.query('COMMIT');
+    
+    res.json({
+      success: true,
+      message: 'Débit effectué avec succès',
+      data: {
+        newBalance: newBalance,
+        amount: debitAmount,
+        transactionId: txId
+      }
+    });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Debit error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors du débit'
+    });
+  } finally {
+    client.release();
+  }
 });
 
 // Graceful shutdown

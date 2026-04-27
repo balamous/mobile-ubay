@@ -303,6 +303,8 @@ class _CreateCardScreenState extends State<CreateCardScreen>
         'gradientEnd': _selectedGradientEnd,
       }, AuthService.to.token.value);
 
+      print(result.toString());
+
       if (result['success'] == true) {
         // Update generated number with real one from API
         setState(() {

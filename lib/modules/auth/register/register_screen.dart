@@ -133,6 +133,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           },
         );
       } else {
+        print(authService.error);
         // Show error message
         Get.snackbar(
           'Erreur d\'inscription',

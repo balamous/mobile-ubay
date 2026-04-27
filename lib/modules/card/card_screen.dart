@@ -113,13 +113,17 @@ class _CardScreenState extends State<CardScreen> {
                 cards: cards,
                 height: 215,
                 showDetails: _showDetails,
+                onPageChanged: (i) {
+                  debugPrint('DEBUG: Page changed to index $i');
+                  setState(() {
+                    _selectedIndex = i;
+                  });
+                },
                 onCardTap: (i) {
                   debugPrint(
                       'DEBUG: Card tapped at index $i, previous index: $_selectedIndex');
                   setState(() {
                     _selectedIndex = i;
-                    debugPrint(
-                        'DEBUG: _selectedIndex updated to: $_selectedIndex');
                   });
                 },
               ).animate().fadeIn(duration: 400.ms),

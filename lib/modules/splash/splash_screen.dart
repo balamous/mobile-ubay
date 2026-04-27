@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/constants/app_colors.dart';
 import '../../routes/app_routes.dart';
 import '../../services/auth_service.dart';
+import '../../services/database_service.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -148,7 +149,10 @@ class _SplashScreenState extends State<SplashScreen>
       final authService = AuthService.to;
 
       if (authService.isLoggedIn.value && authService.token.value.isNotEmpty) {
-        // User is logged in, go to dashboard
+        // User is logged in - fetch fresh data from API
+        await DatabaseService.to.refreshUserData();
+
+        // Go to dashboard
         if (seenOnboarding) {
           Get.offAllNamed(AppRoutes.dashboard);
         } else {

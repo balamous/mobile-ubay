@@ -7,6 +7,7 @@ import '../../core/utils/formatters.dart';
 import '../../services/database_service.dart';
 import '../../data/models/transaction_model.dart';
 import '../../services/app_controller.dart';
+import '../../services/transaction_service.dart';
 import '../../widgets/custom_button.dart';
 import '../../widgets/input_field.dart';
 import '../../widgets/success_overlay.dart';
@@ -47,26 +48,22 @@ class _TopupScreenState extends State<TopupScreen> {
 
     setState(() => _isLoading = true);
     await Future.delayed(const Duration(milliseconds: 1500));
-    final ref = _appCtrl.generateReference('TOP');
-    _appCtrl.addTransaction(TransactionModel(
-      id: 'txn_${DateTime.now().millisecondsSinceEpoch}',
-      type: TransactionType.topup,
-      status: TransactionStatus.completed,
-      amount: amount,
-      description: 'Recharge via $_selectedMethod',
-      recipient: _selectedMethod,
-      date: DateTime.now(),
-      reference: ref,
-      category: 'Recharge',
-      isCredit: true,
-    ));
-    _appCtrl.updateBalance(amount);
+
+    // Sauvegarder la transaction avec TransactionService
+    final success = await TransactionService.to.saveTopup(
+      amount,
+      'Recharge via $_selectedMethod',
+      _selectedMethod,
+    );
+
+    if (success) {
+      _appCtrl.updateBalance(amount);
+    }
     setState(() => _isLoading = false);
     await SuccessOverlay.show(
       title: 'Recharge effectuée !',
       subtitle: 'Votre portefeuille a été rechargé.',
       amount: amount,
-      reference: ref,
       onDone: Get.back,
     );
   }

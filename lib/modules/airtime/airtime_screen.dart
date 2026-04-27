@@ -55,7 +55,8 @@ class _AirtimeScreenState extends State<AirtimeScreen> {
     );
 
     if (success) {
-      _appCtrl.updateBalance(-_selectedAmount!);
+      // Rafraîchir les données utilisateur depuis le serveur
+      await DatabaseService.to.refreshUserData();
     }
     setState(() => _isLoading = false);
     await SuccessOverlay.show(
@@ -93,8 +94,10 @@ class _AirtimeScreenState extends State<AirtimeScreen> {
               ),
             ),
             const SizedBox(height: 14),
-            Row(
-              children: DatabaseService.to.operators.map((op) {
+            Obx(() => Row(
+              children: DatabaseService.to.operators.isEmpty
+                  ? []
+                  : DatabaseService.to.operators.map((op) {
                 final isSelected = _selectedOperator == op['name'];
                 final color =
                     Color(int.parse(op['color'].replaceAll('#', '0xFF')));
@@ -179,8 +182,9 @@ class _AirtimeScreenState extends State<AirtimeScreen> {
                     ),
                   ),
                 );
-              }).toList(),
-            ).animate().fadeIn(duration: 400.ms),
+              }).toList()
+            ,
+            )).animate().fadeIn(duration: 400.ms),
             const SizedBox(height: 24),
             // Phone number
             InputField(

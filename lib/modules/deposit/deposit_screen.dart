@@ -47,6 +47,23 @@ class _DepositScreenState extends State<DepositScreen> {
       double.parse(_amountCtrl.text) > 0 &&
       _selectedMethod != null;
 
+  @override
+  void initState() {
+    super.initState();
+    // Charger les méthodes de paiement si elles sont vides
+    if (DatabaseService.to.paymentMethods.isEmpty) {
+      DatabaseService.to.loadPaymentMethods();
+    }
+    // Sélectionner automatiquement la première méthode si disponible
+    ever(DatabaseService.to.paymentMethods, (methods) {
+      if (methods.isNotEmpty && _selectedMethod == null) {
+        setState(() {
+          _selectedMethod = methods.first['id'];
+        });
+      }
+    });
+  }
+
   Future<void> _deposit() async {
     if (!_canSubmit) return;
 
@@ -71,7 +88,8 @@ class _DepositScreenState extends State<DepositScreen> {
     );
 
     if (success) {
-      _appCtrl.updateBalance(amount);
+      // Rafraîchir les données utilisateur depuis le serveur
+      await DatabaseService.to.refreshUserData();
     }
     setState(() => _isLoading = false);
     await SuccessOverlay.show(
@@ -213,109 +231,125 @@ class _DepositScreenState extends State<DepositScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            ...DatabaseService.to.paymentMethods.map((method) {
-              final isSelected = _selectedMethod == method['name'];
-              return GestureDetector(
-                onTap: () => setState(() => _selectedMethod = method['name']),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  margin: const EdgeInsets.only(bottom: 10),
+            Obx(() {
+              if (DatabaseService.to.paymentMethods.isEmpty) {
+                return Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: isSelected
-                        ? AppColors.primary.withOpacity(0.08)
-                        : isDark
-                            ? AppColors.cardDark
-                            : AppColors.white,
+                    color: isDark ? AppColors.grey800 : AppColors.grey100,
                     borderRadius: BorderRadius.circular(AppConstants.radiusLG),
-                    border: Border.all(
-                      color: isSelected
-                          ? AppColors.primary
-                          : isDark
-                              ? AppColors.grey800
-                              : AppColors.grey200,
-                      width: isSelected ? 1.5 : 1,
-                    ),
                   ),
                   child: Row(
                     children: [
-                      Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius:
-                              BorderRadius.circular(AppConstants.radiusMD),
-                          border: Border.all(
-                            color: isSelected
-                                ? AppColors.primary
-                                : Colors.transparent,
-                            width: 2,
-                          ),
-                        ),
-                        child: ClipRRect(
-                          borderRadius:
-                              BorderRadius.circular(AppConstants.radiusMD),
-                          child: Image.asset(
-                            method['logoPath']!,
-                            width: 48,
-                            height: 48,
-                            fit: BoxFit.cover,
-                            errorBuilder: (context, error, stackTrace) {
-                              return Container(
-                                color: Color(
-                                  int.parse(
-                                    method['color']!.replaceAll('#', '0xFF'),
-                                  ),
-                                ).withOpacity(0.12),
-                                child: Icon(
-                                  Icons.phone_android_rounded,
-                                  size: 22,
-                                  color: Color(
-                                    int.parse(
-                                      method['color']!.replaceAll('#', '0xFF'),
-                                    ),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
+                      Icon(
+                        Icons.info_outline,
+                        color: AppColors.grey400,
+                        size: 20,
                       ),
-                      const SizedBox(width: 14),
-                      Text(
-                        method['name']!,
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: isDark ? AppColors.white : AppColors.grey900,
-                        ),
-                      ),
-                      const Spacer(),
-                      AnimatedContainer(
-                        duration: const Duration(milliseconds: 200),
-                        width: 22,
-                        height: 22,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: isSelected
-                              ? AppColors.primary
-                              : Colors.transparent,
-                          border: Border.all(
-                            color: isSelected
-                                ? AppColors.primary
-                                : AppColors.grey400,
-                            width: 2,
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Chargement des méthodes de paiement...',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color:
+                                isDark ? AppColors.grey400 : AppColors.grey600,
                           ),
                         ),
-                        child: isSelected
-                            ? const Icon(Icons.check_rounded,
-                                color: Colors.white, size: 13)
-                            : null,
                       ),
                     ],
                   ),
-                ),
+                );
+              }
+              return Column(
+                children: DatabaseService.to.paymentMethods.map((method) {
+                  final isSelected = _selectedMethod == method['name'];
+                  return GestureDetector(
+                    onTap: () =>
+                        setState(() => _selectedMethod = method['name']),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 200),
+                      margin: const EdgeInsets.only(bottom: 10),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? AppColors.primary.withOpacity(0.08)
+                            : isDark
+                                ? AppColors.cardDark
+                                : AppColors.white,
+                        borderRadius:
+                            BorderRadius.circular(AppConstants.radiusLG),
+                        border: Border.all(
+                          color: isSelected
+                              ? AppColors.primary
+                              : isDark
+                                  ? AppColors.grey800
+                                  : AppColors.grey200,
+                          width: isSelected ? 1.5 : 1,
+                        ),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 48,
+                            height: 48,
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius:
+                                  BorderRadius.circular(AppConstants.radiusMD),
+                              border: Border.all(
+                                color: isSelected
+                                    ? AppColors.primary
+                                    : Colors.transparent,
+                                width: 2,
+                              ),
+                            ),
+                            child: ClipRRect(
+                              borderRadius:
+                                  BorderRadius.circular(AppConstants.radiusMD),
+                              child: Image.asset(
+                                method['logoPath']!,
+                                width: 48,
+                                height: 48,
+                                fit: BoxFit.cover,
+                                errorBuilder: (context, error, stackTrace) {
+                                  return Container(
+                                    color: Color(
+                                      int.parse(
+                                        method['color']!
+                                            .replaceAll('#', '0xFF'),
+                                      ),
+                                    ).withOpacity(0.12),
+                                    child: Icon(
+                                      Icons.phone_android_rounded,
+                                      size: 22,
+                                      color: Color(
+                                        int.parse(
+                                          method['color']!
+                                              .replaceAll('#', '0xFF'),
+                                        ),
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Text(
+                            method['name']!,
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color:
+                                  isDark ? AppColors.white : AppColors.grey900,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }).toList(),
               );
             }),
             const SizedBox(height: 32),
