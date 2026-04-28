@@ -7,6 +7,7 @@ import '../../core/constants/app_constants.dart';
 import '../../services/dashboard_service.dart';
 import '../../services/auth_service.dart';
 import '../../data/models/user_model.dart';
+import '../transfer/scheduled_transfer_screen.dart';
 import '../../data/models/transaction_model.dart';
 import '../../data/models/card_model.dart';
 import '../../widgets/visa_card_widget.dart';
@@ -518,12 +519,10 @@ class _DashboardDynamicScreenState extends State<DashboardDynamicScreen>
               const SizedBox(width: 12),
               Expanded(
                 child: _buildActionCard(
-                  'Services',
-                  Icons.apps,
+                  'Prélèvement',
+                  Icons.schedule_send,
                   AppColors.info,
-                  () {
-                    // Navigation vers services
-                  },
+                  () => Get.to(() => const ScheduledTransferScreen()),
                 ),
               ),
             ],

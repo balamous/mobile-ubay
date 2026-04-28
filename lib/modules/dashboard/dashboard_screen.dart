@@ -584,10 +584,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   isCompact: true,
                 ),
                 ActionTile(
-                  label: 'Plus',
+                  label: 'Autres services',
                   icon: Icons.apps_rounded,
                   color: AppColors.grey500,
-                  onTap: () => Get.toNamed(AppRoutes.services),
+                  onTap: () => Get.toNamed(AppRoutes.otherServices),
                   isCompact: true,
                 ),
               ],

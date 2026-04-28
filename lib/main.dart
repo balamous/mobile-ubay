@@ -15,6 +15,7 @@ import 'services/twofa_service.dart';
 import 'services/transaction_service.dart';
 import 'services/websocket_service.dart';
 import 'services/contact_service.dart';
+import 'services/scheduled_transfer_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -46,6 +47,7 @@ void main() async {
   await Get.put(AppController());
   await Get.put(WebSocketService()); // Real-time transaction notifications
   await Get.put(ContactService()); // Transfer contacts
+  await Get.put(ScheduledTransferService()); // Automatic transfers
   await Get.putAsync(() async => await BiometricService().init());
   await Get.putAsync(() async => await TwoFAService().init());
 

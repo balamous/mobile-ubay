@@ -2020,6 +2020,30 @@ async function runMigrations() {
       console.log('Note: user_contacts table check:', contactError.message);
     }
 
+    // Create scheduled_transfers table for automatic transfers
+    try {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS scheduled_transfers (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          recipient_phone VARCHAR(20) NOT NULL,
+          amount DECIMAL(15,2) NOT NULL,
+          frequency VARCHAR(20) NOT NULL CHECK (frequency IN ('daily', 'weekly', 'monthly')),
+          start_date DATE NOT NULL,
+          end_date DATE,
+          reason VARCHAR(255),
+          status VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active', 'paused', 'completed', 'cancelled')),
+          last_execution TIMESTAMP,
+          next_execution TIMESTAMP,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      console.log('Table scheduled_transfers checked/created');
+    } catch (scheduleError) {
+      console.log('Note: scheduled_transfers table check:', scheduleError.message);
+    }
+
     console.log('Migrations completed');
   } catch (error) {
     console.error('Migration error:', error);
@@ -2308,7 +2332,6 @@ app.get('/api/contacts/:userId', async (req, res) => {
         uc.created_at,
         u.first_name,
         u.last_name,
-        u.photo_url,
         u.phone as user_phone
       FROM user_contacts uc
       LEFT JOIN users u ON uc.contact_user_id = u.id
@@ -2324,7 +2347,6 @@ app.get('/api/contacts/:userId', async (req, res) => {
       name: row.name || `${row.first_name || ''} ${row.last_name || ''}`.trim() || row.phone,
       contactUserId: row.contact_user_id,
       hasAccount: !!row.contact_user_id,
-      photoUrl: row.photo_url,
       createdAt: row.created_at
     }));
 
@@ -2339,6 +2361,187 @@ app.get('/api/contacts/:userId', async (req, res) => {
       success: false,
       error: 'Erreur lors de la récupération des contacts'
     });
+  }
+});
+
+// ========================================
+// SCHEDULED TRANSFERS - Create automatic transfer
+// ========================================
+app.post('/api/scheduled-transfers', async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { userId, recipientPhone, amount, frequency, startDate, endDate, reason } = req.body;
+
+    if (!userId || !recipientPhone || !amount || !frequency || !startDate) {
+      return res.status(400).json({
+        success: false,
+        error: 'userId, recipientPhone, amount, frequency et startDate sont requis'
+      });
+    }
+
+    // Calculate next execution date
+    const start = new Date(startDate);
+    let nextExecution = new Date(start);
+    const now = new Date();
+
+    // If start date is in the past, calculate from today
+    if (start < now) {
+      nextExecution = new Date(now);
+      if (frequency === 'daily') {
+        nextExecution.setDate(nextExecution.getDate() + 1);
+      } else if (frequency === 'weekly') {
+        nextExecution.setDate(nextExecution.getDate() + 7);
+      } else if (frequency === 'monthly') {
+        nextExecution.setMonth(nextExecution.getMonth() + 1);
+      }
+    }
+
+    const result = await client.query(
+      `INSERT INTO scheduled_transfers 
+       (user_id, recipient_phone, amount, frequency, start_date, end_date, reason, next_execution)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [userId, recipientPhone, amount, frequency, startDate, endDate || null, reason || null, nextExecution]
+    );
+
+    res.json({
+      success: true,
+      data: { scheduledTransfer: result.rows[0] }
+    });
+
+  } catch (error) {
+    console.error('Create scheduled transfer error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors de la création du prélèvement automatique'
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// ========================================
+// SCHEDULED TRANSFERS - Get user's scheduled transfers
+// ========================================
+app.get('/api/scheduled-transfers/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const result = await pool.query(
+      `SELECT st.*, 
+        u.first_name as recipient_first_name, 
+        u.last_name as recipient_last_name
+       FROM scheduled_transfers st
+       LEFT JOIN users u ON st.recipient_phone = u.phone
+       WHERE st.user_id = $1
+       ORDER BY st.created_at DESC`,
+      [userId]
+    );
+
+    const scheduledTransfers = result.rows.map(row => ({
+      id: row.id,
+      recipientPhone: row.recipient_phone,
+      recipientName: row.recipient_first_name && row.recipient_last_name
+        ? `${row.recipient_first_name} ${row.recipient_last_name}`
+        : row.recipient_phone,
+      amount: parseFloat(row.amount),
+      frequency: row.frequency,
+      startDate: row.start_date,
+      endDate: row.end_date,
+      reason: row.reason,
+      status: row.status,
+      lastExecution: row.last_execution,
+      nextExecution: row.next_execution,
+      createdAt: row.created_at
+    }));
+
+    res.json({
+      success: true,
+      data: { scheduledTransfers }
+    });
+
+  } catch (error) {
+    console.error('Get scheduled transfers error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors de la récupération des prélèvements'
+    });
+  }
+});
+
+// ========================================
+// SCHEDULED TRANSFERS - Update status (pause/resume/cancel)
+// ========================================
+app.patch('/api/scheduled-transfers/:id', async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!['active', 'paused', 'cancelled'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Status invalide (active, paused, cancelled)'
+      });
+    }
+
+    const result = await client.query(
+      `UPDATE scheduled_transfers 
+       SET status = $1, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $2
+       RETURNING *`,
+      [status, id]
+    );
+
+    if (result.rowCount === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Prélèvement non trouvé'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: { scheduledTransfer: result.rows[0] }
+    });
+
+  } catch (error) {
+    console.error('Update scheduled transfer error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors de la mise à jour'
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// ========================================
+// SCHEDULED TRANSFERS - Delete
+// ========================================
+app.delete('/api/scheduled-transfers/:id', async (req, res) => {
+  const client = await pool.connect();
+
+  try {
+    const { id } = req.params;
+
+    await client.query('DELETE FROM scheduled_transfers WHERE id = $1', [id]);
+
+    res.json({
+      success: true,
+      message: 'Prélèvement supprimé'
+    });
+
+  } catch (error) {
+    console.error('Delete scheduled transfer error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Erreur lors de la suppression'
+    });
+  } finally {
+    client.release();
   }
 });
 

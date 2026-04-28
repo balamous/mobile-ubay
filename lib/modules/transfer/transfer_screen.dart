@@ -13,6 +13,7 @@ import '../../widgets/success_overlay.dart';
 import '../../core/utils/biometric_guard.dart';
 import '../../services/transaction_service.dart';
 import '../../services/contact_service.dart';
+import 'scheduled_transfer_screen.dart';
 
 class TransferScreen extends StatefulWidget {
   const TransferScreen({super.key});
@@ -102,6 +103,39 @@ class _TransferScreenState extends State<TransferScreen> {
         leading: _backButton(isDark),
         title: const Text('Transfert'),
         centerTitle: true,
+        actions: [
+          // Bouton prélèvement automatique
+          GestureDetector(
+            onTap: () => Get.to(() => const ScheduledTransferScreen()),
+            child: Container(
+              margin: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.primary.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.schedule_outlined,
+                    size: 18,
+                    color: AppColors.primary,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Auto',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
       body: SingleChildScrollView(
         physics: const BouncingScrollPhysics(),

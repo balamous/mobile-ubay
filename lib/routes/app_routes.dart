@@ -1,3 +1,4 @@
+import 'package:fintech_b2b/modules/transfer/scheduled_transfer_screen.dart';
 import 'package:get/get.dart';
 import '../modules/splash/splash_screen.dart';
 import '../modules/auth/login/login_screen.dart';
@@ -47,6 +48,7 @@ class AppRoutes {
   static const String twoFASetup = '/2fa-setup';
   static const String twoFAVerify = '/2fa-verify';
   static const String personalInfo = '/personal-info';
+  static const String otherServices = '/other-services';
 
   static final List<GetPage> pages = [
     GetPage(name: splash, page: () => const SplashScreen()),
@@ -84,5 +86,6 @@ class AppRoutes {
     GetPage(name: twoFASetup, page: () => const TwoFASetupScreen(), transition: Transition.rightToLeft),
     GetPage(name: twoFAVerify, page: () => const TwoFAVerifyScreen(), transition: Transition.rightToLeft),
     GetPage(name: personalInfo, page: () => const PersonalInfoScreen(), transition: Transition.rightToLeft),
+    GetPage(name: otherServices, page: () => const ScheduledTransferScreen(), transition: Transition.rightToLeft),
   ];
 }
